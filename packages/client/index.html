@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Skeleton</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="labels"></div>
+    <pre id="hud"></pre>
+    <div id="menu">
+      <form id="join">
+        <h1>Skeleton</h1>
+        <input id="name" maxlength="24" placeholder="Имя" autocomplete="off" />
+        <button type="submit">Играть</button>
+        <p id="status"></p>
+        <p class="help">WASD — ходьба · Shift — бег · Space — прыжок · мышь — камера · колесо — зум · P — пиксели · Esc — меню</p>
+      </form>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
