@@ -36,6 +36,16 @@ export function spawnState(terrain: Terrain): PlayerState {
   return { x: 0, y: terrain.heightAt(0, 0), z: 0, vy: 0, yaw: 0, grounded: true };
 }
 
+export type MoveMode = 'ground' | 'air' | 'swim';
+
+/** What the body is doing at a position. Works for any player, so remote avatars animate like the local one. */
+export function moveMode(x: number, y: number, z: number, terrain: Terrain): MoveMode {
+  const ground = terrain.heightAt(x, z);
+  const swimFloor = WATER_LEVEL - SWIM_DEPTH;
+  if (ground < swimFloor && y <= swimFloor + 0.05) return 'swim';
+  return y - Math.max(ground, swimFloor) > 0.25 ? 'air' : 'ground';
+}
+
 function clampUnit(v: number): number {
   return Number.isFinite(v) ? Math.max(-1, Math.min(1, v)) : 0;
 }
@@ -55,7 +65,7 @@ export function stepPlayer(s: PlayerState, input: PlayerInput, dt: number, terra
   }
 
   const ground = terrain.heightAt(s.x, s.z);
-  const swimming = ground < WATER_LEVEL - SWIM_DEPTH && s.y <= WATER_LEVEL - SWIM_DEPTH + 0.05;
+  const swimming = moveMode(s.x, s.y, s.z, terrain) === 'swim';
   const speed = swimming ? SWIM_SPEED : input.sprint ? SPRINT_SPEED : WALK_SPEED;
 
   // yaw 0 looks at -Z, like a three.js camera.
