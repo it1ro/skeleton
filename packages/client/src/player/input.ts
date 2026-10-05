@@ -37,7 +37,8 @@ export class Input {
   }
 
   lock(): void {
-    void this.canvas.requestPointerLock();
+    // Rejects if the user leaves too fast or the page is not focused; the menu stays open then.
+    this.canvas.requestPointerLock()?.catch(() => {});
   }
 
   down(code: string): boolean {
