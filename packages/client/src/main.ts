@@ -1,4 +1,4 @@
-import { TICK_DT, TICK_RATE, createTerrain, spawnState } from '@skeleton/shared';
+import { TICK_DT, TICK_RATE, createTerrain, moveMode, spawnState } from '@skeleton/shared';
 import { connect, type Connection } from './net/connection.ts';
 import { createView } from './render/renderer.ts';
 import { Environment } from './render/environment.ts';
@@ -58,7 +58,7 @@ async function start(name: string): Promise<void> {
 
   const env = new Environment(scene);
   const chunks = new ChunkManager(seed);
-  const remotes = new RemotePlayers();
+  const remotes = new RemotePlayers(terrain);
   const local = new LocalPlayer(terrain, spawnState(terrain));
   const me = new Avatar(name || 'Я', 0xd9a441);
   const orbit = new OrbitCamera(camera, terrain);
@@ -107,7 +107,7 @@ async function start(name: string): Promise<void> {
     if (outbox.length) conn.send({ t: 'input', inputs: outbox });
 
     const pos = local.renderPosition(accumulator / TICK_DT, dt);
-    me.place(pos.x, pos.y, pos.z, pos.x - prevPos.x, pos.z - prevPos.z, local.speed, dt);
+    me.place(pos.x, pos.y, pos.z, pos.x - prevPos.x, pos.z - prevPos.z, local.speed, moveMode(pos.x, pos.y, pos.z, terrain), dt);
     prevPos = pos;
     orbit.update(input, pos.x, pos.y, pos.z);
     chunks.update(pos.x, pos.z);

@@ -1,34 +1,22 @@
-import {
-  AnimationMixer,
-  BoxGeometry,
-  CapsuleGeometry,
-  Group,
-  Mesh,
-  MeshStandardMaterial,
-  Vector3,
-  type AnimationAction,
-  type PerspectiveCamera,
-} from 'three/webgpu';
-import { SNAPSHOT_EVERY, type PlayerSnapshot } from '@skeleton/shared';
-import { loadModel } from '../assets/models.ts';
+import { BoxGeometry, CapsuleGeometry, Group, Mesh, MeshStandardMaterial, Vector3, type PerspectiveCamera } from 'three/webgpu';
+import { SNAPSHOT_EVERY, moveMode, type MoveMode, type PlayerSnapshot, type Terrain } from '@skeleton/shared';
+import { loadAnimations, loadModel } from '../assets/models.ts';
+import { Animator } from './animator.ts';
 
 /** Remote players are drawn this far in the past, so there are two snapshots to blend between. */
 const INTERP_DELAY_TICKS = SNAPSHOT_EVERY * 2;
-const RUN_SPEED = 7;
 
 const body = new CapsuleGeometry(0.35, 1.1, 4, 8).translate(0, 0.9, 0);
 const nose = new BoxGeometry(0.2, 0.15, 0.3).translate(0, 1.45, -0.35);
 
 /**
- * One player's figure. Uses `player.glb` when the friend's model is in src/assets/models,
- * with optional `Idle` / `Walk` / `Run` clips; a capsule until then.
+ * One player's figure: `player.glb` animated with clips from `anims_humanoid.glb`, a capsule until they load
+ * or if there is no model.
  */
 export class Avatar {
   readonly root = new Group();
   private readonly label = document.createElement('div');
-  private mixer: AnimationMixer | null = null;
-  private actions: Partial<Record<'Idle' | 'Walk' | 'Run', AnimationAction>> = {};
-  private current: AnimationAction | null = null;
+  private animator: Animator | null = null;
   private facing = 0;
 
   constructor(name: string, color: number) {
@@ -41,23 +29,18 @@ export class Avatar {
     this.label.textContent = name;
     document.getElementById('labels')!.append(this.label);
 
-    void loadModel('player').then((model) => {
+    void Promise.all([loadModel('player'), loadAnimations('anims_humanoid')]).then(([model, clips]) => {
       if (!model) return;
       this.root.remove(placeholder);
       // Blender characters face -Y (front view), which glTF turns into +Z; the game's forward is -Z.
       model.scene.rotation.y = Math.PI;
       this.root.add(model.scene);
-      this.mixer = new AnimationMixer(model.scene);
-      for (const clip of model.animations) {
-        if (clip.name === 'Idle' || clip.name === 'Walk' || clip.name === 'Run') {
-          this.actions[clip.name] = this.mixer.clipAction(clip);
-        }
-      }
+      this.animator = new Animator(model.scene, [...model.animations, ...clips]);
     });
   }
 
   /** Turns the figure toward its movement, like Valheim: the camera stays free. */
-  place(x: number, y: number, z: number, dx: number, dz: number, speed: number, dt: number): void {
+  place(x: number, y: number, z: number, dx: number, dz: number, speed: number, mode: MoveMode, dt: number): void {
     if (Math.hypot(dx, dz) > 1e-3) {
       const target = Math.atan2(-dx, -dz);
       let diff = target - this.facing;
@@ -66,18 +49,7 @@ export class Avatar {
     }
     this.root.position.set(x, y, z);
     this.root.rotation.y = this.facing;
-    this.animate(speed, dt);
-  }
-
-  private animate(speed: number, dt: number): void {
-    if (!this.mixer) return;
-    const next = speed > RUN_SPEED ? this.actions.Run : speed > 0.5 ? this.actions.Walk : this.actions.Idle;
-    if (next && next !== this.current) {
-      next.reset().fadeIn(0.2).play();
-      this.current?.fadeOut(0.2);
-      this.current = next;
-    }
-    this.mixer.update(dt);
+    this.animator?.update(mode, speed, dt);
   }
 
   updateLabel(camera: PerspectiveCamera, width: number, height: number): void {
@@ -104,6 +76,9 @@ interface Sample {
 /** Other players: snapshot buffer, drawn with interpolation. */
 export class RemotePlayers {
   readonly root = new Group();
+
+  constructor(private readonly terrain: Terrain) {}
+
   private readonly players = new Map<number, { avatar: Avatar; samples: Sample[]; last: Vector3 }>();
 
   get count(): number {
@@ -150,7 +125,7 @@ export class RemotePlayers {
       const x = a.snap.x + (b.snap.x - a.snap.x) * k;
       const y = a.snap.y + (b.snap.y - a.snap.y) * k;
       const z = a.snap.z + (b.snap.z - a.snap.z) * k;
-      p.avatar.place(x, y, z, x - p.last.x, z - p.last.z, b.snap.speed, dt);
+      p.avatar.place(x, y, z, x - p.last.x, z - p.last.z, b.snap.speed, moveMode(x, y, z, this.terrain), dt);
       p.last.set(x, y, z);
       p.avatar.updateLabel(camera, width, height);
     }
