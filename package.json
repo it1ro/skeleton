@@ -8,7 +8,8 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -k -n server,client -c yellow,cyan \"npm run dev -w @skeleton/server\" \"npm run dev -w @skeleton/client\"",
+    "dev": "npm run dev -w @skeleton/client",
+    "dev:online": "concurrently -k -n server,client -c yellow,cyan \"npm run dev -w @skeleton/server\" \"npm run dev -w @skeleton/client\"",
     "build": "npm run typecheck && npm run build -w @skeleton/client",
     "server": "npm run start -w @skeleton/server",
     "typecheck": "tsc --noEmit",

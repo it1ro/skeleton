@@ -1,5 +1,5 @@
-import { TICK_DT, TICK_RATE, createTerrain, moveMode, spawnState } from '@skeleton/shared';
-import { connect, type Connection } from './net/connection.ts';
+import { DEFAULT_SEED, TICK_DT, TICK_RATE, createTerrain, moveMode, spawnState } from '@skeleton/shared';
+import { connectLocal, connectServer, type Connection } from './net/connection.ts';
 import { createView } from './render/renderer.ts';
 import { Environment } from './render/environment.ts';
 import { ChunkManager } from './world/chunks.ts';
@@ -16,6 +16,11 @@ const status = document.getElementById('status')!;
 const hud = document.getElementById('hud')!;
 
 const NAME_KEY = 'skeleton.name';
+// Single player by default. `?online` joins the co-op server, `?seed=42` picks the single player world.
+const params = new URLSearchParams(location.search);
+const online = params.has('online');
+const seedParam = Number(params.get('seed') ?? Number.NaN);
+const localSeed = Number.isFinite(seedParam) ? seedParam : DEFAULT_SEED;
 try {
   nameInput.value = localStorage.getItem(NAME_KEY) ?? '';
 } catch {
@@ -47,7 +52,7 @@ form.addEventListener('submit', (e) => {
 });
 
 async function start(name: string): Promise<void> {
-  const conn: Connection = await connect(name);
+  const conn: Connection = online ? await connectServer(name) : connectLocal(name, localSeed);
   const { id: selfId, seed } = conn.welcome;
   const terrain = createTerrain(seed);
   const view = await createView(canvas);
