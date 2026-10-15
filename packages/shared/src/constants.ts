@@ -11,4 +11,7 @@ export const WATER_LEVEL = 0;
 /** Real seconds in one in-game day. */
 export const DAY_LENGTH = 20 * 60;
 
+/** World seed when none is given (`SEED` on the server, `?seed=` in the browser). */
+export const DEFAULT_SEED = 1337;
+
 export const SERVER_PORT = 8787;
