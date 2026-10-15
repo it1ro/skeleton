@@ -5,3 +5,5 @@ dist/
 *.blend1
 # Source packs are large (~500 MB); built .glb files in packages/client/src/assets/models are committed.
 assets-src/quaternius/
+# The Meshy hero source with 4K textures (~25 MB); the built player.glb is committed.
+assets-src/meshy/

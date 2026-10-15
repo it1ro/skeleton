@@ -1,27 +1,32 @@
 # Исходники ассетов
 
-Здесь лежат исходные паки, из которых `npm run assets` (`scripts/build-assets.ts`) собирает `.glb` для игры.
-Паки большие и в git не входят. Готовые `.glb` в `packages/client/src/assets/models/` закоммичены,
-поэтому паки нужны только для пересборки.
-
-## Quaternius (CC0)
-
-Бесплатные версии [Standard] трёх паков. Распакуйте каждый zip в `assets-src/quaternius/` как есть:
-
-| Пак | Ссылка | Что берём |
-| --- | --- | --- |
-| Universal Base Characters | https://quaternius.itch.io/universal-base-characters | голова, глаза, брови, борода |
-| Modular Character Outfits – Fantasy | https://quaternius.itch.io/modular-character-outfits-fantasy | костюм рейнджера |
-| Universal Animation Library | https://quaternius.itch.io/universal-animation-library | анимации |
+Здесь лежат исходники, из которых `npm run assets` (`scripts/build-assets.ts`) собирает `.glb` для игры.
+Они большие и в git не входят. Готовые `.glb` в `packages/client/src/assets/models/` закоммичены,
+поэтому исходники нужны только для пересборки.
 
 Должно получиться:
 
 ```
-assets-src/quaternius/
-  Universal Base Characters[Standard]/
-  Modular Character Outfits - Fantasy[Standard]/
-  Universal Animation Library[Standard]/
+assets-src/
+  meshy/
+    skeleton.glb
+  quaternius/
+    Universal Animation Library[Standard]/
 ```
 
-Лицензия всех трёх паков — CC0 1.0: можно использовать в коммерческой игре, указывать автора не обязательно.
+## Meshy: модель героя
+
+`meshy/skeleton.glb` — скелет, сгенерированный в [Meshy](https://www.meshy.ai): Text to Image, потом Image to 3D,
+Remesh до 10 000 граней. Скачан без рига, в T-позе, высота 1,8 м, начало координат внизу, формат glb.
+Риг не нужен: сборка сама сажает модель на кости UAL (см. `docs/assets.md`).
+
+## Quaternius (CC0)
+
+Бесплатная версия [Standard]. Распакуйте zip в `assets-src/quaternius/` как есть:
+
+| Пак | Ссылка | Что берём |
+| --- | --- | --- |
+| Universal Animation Library | https://quaternius.itch.io/universal-animation-library | скелет и анимации |
+
+Лицензия — CC0 1.0: можно использовать в коммерческой игре, указывать автора не обязательно.
 Автор — Quaternius (https://quaternius.com, https://www.patreon.com/quaternius).
