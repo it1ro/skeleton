@@ -8,7 +8,7 @@ import type { MoveMode } from '@skeleton/shared';
 type Clip = 'Idle' | 'Walk' | 'Jog' | 'Sprint' | 'JumpStart' | 'JumpLoop' | 'JumpLand' | 'SwimIdle' | 'Swim';
 
 /** Speed (m/s) at which each looped move clip has no foot sliding. Measured by `npm run assets`. */
-const SPEEDS: Partial<Record<Clip, number>> = { Walk: 0.97, Jog: 5.36, Sprint: 8.25, Swim: 2.18 };
+const SPEEDS: Partial<Record<Clip, number>> = { Walk: 0.85, Jog: 4.66, Sprint: 7.17, Swim: 1.89 };
 const FADE = 0.2;
 const IDLE_BELOW = 0.3;
 const WALK_BELOW = 2.5;

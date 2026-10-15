@@ -20,7 +20,7 @@ http://localhost:5173/?online в двух вкладках или на двух 
 
 Перед коммитом: `npm run typecheck && npm test`.
 
-Пересборка моделей и анимаций из исходных паков: `npm run assets` (паки — см. `assets-src/README.md`).
+Пересборка героя и анимаций из исходников: `npm run assets` (исходники — см. `assets-src/README.md`).
 
 ## Стек
 
@@ -37,8 +37,8 @@ packages/
   server/   сервер для коопа: симуляция из shared за WebSocket
   client/   рендер, ввод, предсказание, стриминг чанков
 scripts/
-  build-assets.ts  сборка .glb героя и анимаций из паков Quaternius
-assets-src/        исходные паки (в git не входят)
+  build-assets.ts  сборка .glb героя и анимаций: модель из Meshy, скелет и клипы Quaternius UAL
+assets-src/        исходники моделей (в git не входят)
 docs/
   assets.md   скелет, анимации, экспорт из Blender
   design.md   геймдизайн: тело как прогрессия
@@ -68,7 +68,7 @@ docs/
 **Время суток** считается из тика симуляции, поэтому у всех игроков одно время.
 
 **Герой и анимации.** Модель (`player.glb`) и анимации (`anims_humanoid.glb`) лежат в разных файлах на одном
-скелете Quaternius UAL. Аниматор (`client/src/world/animator.ts`) выбирает клип по состоянию: на земле, в воздухе
+скелете Quaternius UAL. Сборка подгоняет кости UAL под модель героя и считает веса вершин. Аниматор (`client/src/world/animator.ts`) выбирает клип по состоянию: на земле, в воздухе
 или в воде. Это состояние считается из позиции (`moveMode` в `shared`), поэтому чужие игроки анимируются так же,
 как свой.
 
@@ -83,4 +83,4 @@ docs/
 
 ## Ассеты
 
-Герой и анимации — [Quaternius](https://quaternius.com), CC0.
+Модель героя — Meshy. Скелет и анимации — [Quaternius](https://quaternius.com), CC0.
