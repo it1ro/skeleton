@@ -1,6 +1,6 @@
 import { BoxGeometry, CapsuleGeometry, Group, Mesh, MeshStandardMaterial, Vector3, type PerspectiveCamera } from 'three/webgpu';
 import { SNAPSHOT_EVERY, moveMode, type MoveMode, type PlayerSnapshot, type Terrain } from '@skeleton/shared';
-import { loadAnimations, loadModel } from '../assets/models.ts';
+import { loadAnimations, loadModel, preload } from '../assets/models.ts';
 import { Animator } from './animator.ts';
 
 /** Remote players are drawn this far in the past, so there are two snapshots to blend between. */
@@ -9,9 +9,17 @@ const INTERP_DELAY_TICKS = SNAPSHOT_EVERY * 2;
 const body = new CapsuleGeometry(0.35, 1.1, 4, 8).translate(0, 0.9, 0);
 const nose = new BoxGeometry(0.2, 0.15, 0.3).translate(0, 1.45, -0.35);
 
+const MODEL = 'player';
+const ANIMATIONS = 'anims_humanoid';
+
+/** Starts loading the character files. Resolves when they are in memory, or failed: avatars then fall back to a capsule. */
+export function preloadAvatars(): Promise<void> {
+  return preload(MODEL, ANIMATIONS);
+}
+
 /**
- * One player's figure: `player.glb` animated with clips from `anims_humanoid.glb`, a capsule until they load
- * or if there is no model.
+ * One player's figure: `player.glb` animated with clips from `anims_humanoid.glb`. A capsule only if there is
+ * no model or it failed to load; while it loads, nothing is drawn.
  */
 export class Avatar {
   readonly root = new Group();
@@ -20,23 +28,23 @@ export class Avatar {
   private facing = 0;
 
   constructor(name: string, color: number) {
-    const material = new MeshStandardMaterial({ color, roughness: 0.8 });
-    const placeholder = new Group();
-    placeholder.add(new Mesh(body, material), new Mesh(nose, material));
-    placeholder.traverse((o) => (o.castShadow = true));
-    this.root.add(placeholder);
-
     this.label.textContent = name;
     document.getElementById('labels')!.append(this.label);
 
-    void Promise.all([loadModel('player'), loadAnimations('anims_humanoid')]).then(([model, clips]) => {
-      if (!model) return;
-      this.root.remove(placeholder);
+    const placeholder = () => {
+      const material = new MeshStandardMaterial({ color, roughness: 0.8 });
+      const capsule = new Group();
+      capsule.add(new Mesh(body, material), new Mesh(nose, material));
+      capsule.traverse((o) => (o.castShadow = true));
+      this.root.add(capsule);
+    };
+    Promise.all([loadModel(MODEL), loadAnimations(ANIMATIONS)]).then(([model, clips]) => {
+      if (!model) return placeholder();
       // Blender characters face -Y (front view), which glTF turns into +Z; the game's forward is -Z.
       model.scene.rotation.y = Math.PI;
       this.root.add(model.scene);
       this.animator = new Animator(model.scene, [...model.animations, ...clips]);
-    });
+    }, placeholder);
   }
 
   /** Turns the figure toward its movement, like Valheim: the camera stays free. */
