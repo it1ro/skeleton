@@ -58,6 +58,7 @@ export class ChunkManager {
   private readonly trunkMaterial = new MeshStandardMaterial({ color: 0x5a3d26, roughness: 1 });
   private readonly crownMaterial = new MeshStandardMaterial({ color: 0x2f5a2a, roughness: 1, flatShading: true });
   private center = { cx: Number.NaN, cz: Number.NaN };
+  private waiters: { radius: number; resolve: () => void }[] = [];
 
   constructor(private readonly seed: number) {
     for (let w = 0; w < WORKERS; w++) {
@@ -70,6 +71,33 @@ export class ChunkManager {
       this.workers.push(worker);
       this.busy.push(0);
     }
+  }
+
+  /** Resolves once every chunk within `radius` chunks of the current center is built. Call after `update`. */
+  whenReady(radius: number): Promise<void> {
+    return new Promise((resolve) => {
+      this.waiters.push({ radius, resolve });
+      this.checkWaiters();
+    });
+  }
+
+  private checkWaiters(): void {
+    this.waiters = this.waiters.filter((w) => {
+      if (!this.readyAround(w.radius)) return true;
+      w.resolve();
+      return false;
+    });
+  }
+
+  private readyAround(radius: number): boolean {
+    const { cx, cz } = this.center;
+    for (let dz = -radius; dz <= radius; dz++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (dx * dx + dz * dz > (radius + 0.5) ** 2) continue;
+        if (!this.chunks.get(key(cx + dx, cz + dz))?.ready) return false;
+      }
+    }
+    return true;
   }
 
   get loaded(): number {
@@ -153,6 +181,7 @@ export class ChunkManager {
     chunk.group.position.set(data.cx * CHUNK_SIZE, 0, data.cz * CHUNK_SIZE);
     chunk.ready = true;
     this.root.add(chunk.group);
+    this.checkWaiters();
   }
 
   private dispose(chunk: Chunk): void {

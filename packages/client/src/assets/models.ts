@@ -28,6 +28,11 @@ function load(name: string): Promise<Model> | null {
   return pending;
 }
 
+/** Starts loading the files. Resolves when they are in memory or failed; a failure shows up again on use. */
+export async function preload(...names: string[]): Promise<void> {
+  await Promise.allSettled(names.map((name) => load(name)));
+}
+
 /** A fresh copy of the model (skinned meshes included), or null if there is no such file. */
 export async function loadModel(name: string): Promise<Model | null> {
   const model = await load(name);

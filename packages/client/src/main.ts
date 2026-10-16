@@ -3,7 +3,7 @@ import { connectLocal, connectServer, type Connection } from './net/connection.t
 import { createView } from './render/renderer.ts';
 import { Environment } from './render/environment.ts';
 import { ChunkManager } from './world/chunks.ts';
-import { Avatar, RemotePlayers } from './world/avatars.ts';
+import { Avatar, RemotePlayers, preloadAvatars } from './world/avatars.ts';
 import { Input } from './player/input.ts';
 import { OrbitCamera } from './player/camera.ts';
 import { LocalPlayer } from './player/local.ts';
@@ -27,10 +27,18 @@ try {
   // Storage blocked: start with an empty name.
 }
 
+/** Chunks around the spawn, in each direction, built before the game shows: no holes under the feet at start. */
+const START_CHUNKS = 2;
+
+// The character loads while the player types a name, so the game usually starts at once.
+const avatarsLoaded = preloadAvatars();
+
 const input = new Input(canvas);
 let started = false;
+/** The menu stays up while the world loads, even with the pointer locked. */
+let loaded = false;
 
-document.addEventListener('pointerlockchange', () => menu.classList.toggle('hidden', input.locked));
+document.addEventListener('pointerlockchange', () => menu.classList.toggle('hidden', input.locked && loaded));
 
 form.addEventListener('submit', (e) => {
   e.preventDefault();
@@ -43,7 +51,7 @@ form.addEventListener('submit', (e) => {
   } catch {
     // Not critical.
   }
-  status.textContent = 'Подключение…';
+  status.textContent = 'Загрузка мира…';
   start(name).catch((err: unknown) => {
     started = false;
     status.textContent = err instanceof Error ? err.message : String(err);
@@ -57,17 +65,22 @@ async function start(name: string): Promise<void> {
   const terrain = createTerrain(seed);
   const view = await createView(canvas);
   const { renderer, scene, camera } = view;
-  status.textContent = '';
-  nameInput.hidden = true;
-  form.querySelector('button')!.textContent = 'Продолжить';
 
   const env = new Environment(scene);
   const chunks = new ChunkManager(seed);
   const remotes = new RemotePlayers(terrain);
   const local = new LocalPlayer(terrain, spawnState(terrain));
-  const me = new Avatar(name || 'Я', 0xd9a441);
   const orbit = new OrbitCamera(camera, terrain);
+  chunks.update(local.state.x, local.state.z);
+  await Promise.all([avatarsLoaded, chunks.whenReady(START_CHUNKS)]);
+  const me = new Avatar(name || 'Я', 0xd9a441);
   scene.add(chunks.root, remotes.root, me.root);
+
+  loaded = true;
+  status.textContent = '';
+  nameInput.hidden = true;
+  form.querySelector('button')!.textContent = 'Продолжить';
+  menu.classList.toggle('hidden', input.locked);
 
   let snapTick = conn.welcome.tick;
   let snapTime = performance.now();
