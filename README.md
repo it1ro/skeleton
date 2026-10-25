@@ -42,9 +42,12 @@ scripts/
   build-assets.ts  сборка .glb героя и анимаций: модель из Meshy, скелет и клипы Quaternius UAL
 assets-src/        исходники моделей (в git не входят)
 docs/
-  assets.md   скелет, анимации, экспорт из Blender
-  design.md   геймдизайн: тело как прогрессия
-  roadmap.md  этапы до первой играбельной версии
+  README.md          оглавление геймдизайна
+  pitch.md           основа, столпы, тон, открытые вопросы
+  world.md, characters.md, systems.md, bestiary.md  мир, персонажи, системы, нечисть
+  vertical-slice.md  первый играбельный срез и гипотезы
+  roadmap.md         этапы разработки
+  assets.md          скелет, анимации, экспорт из Blender
 ```
 
 ## Как это устроено
