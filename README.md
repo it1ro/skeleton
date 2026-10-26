@@ -40,7 +40,7 @@ packages/
   client/   рендер, ввод, предсказание, стриминг чанков
 scripts/
   build-assets.ts  сборка .glb героя и анимаций: модель из Meshy, скелет и клипы Quaternius UAL
-assets-src/        исходники моделей (в git не входят)
+assets-src/        исходники моделей: модель Meshy в git, паки Quaternius нет
 docs/
   README.md          оглавление геймдизайна
   pitch.md           основа, столпы, тон, открытые вопросы
