@@ -41,6 +41,7 @@ packages/
 scripts/
   build-assets.ts  сборка .glb героя и анимаций: модель из Meshy, скелет и клипы Quaternius UAL
 assets-src/        исходники моделей (в git не входят)
+spikes/            одноразовые технические тесты, не входят в npm workspaces (rust-bevy — тест стека)
 docs/
   README.md          оглавление геймдизайна
   pitch.md           основа, столпы, тон, открытые вопросы
