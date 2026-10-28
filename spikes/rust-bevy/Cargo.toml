@@ -1,0 +1,42 @@
+[package]
+name = "skeleton-bevy-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone: not part of any Cargo or npm workspace.
+[workspace]
+
+[dependencies]
+bevy = "=0.20.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bevy = { version = "=0.20.0", features = ["webgl2"] }
+
+[features]
+# Native dev builds: `cargo run --features dev`. Not for WASM.
+dev = ["bevy/dynamic_linking"]
+
+# Fast enough to play in debug: optimize dependencies, keep our crate quick to rebuild.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+strip = "debuginfo"
+
+# Browser iteration: no LTO, no debug info, no wasm-opt (index-dev.html).
+[profile.wasm-dev]
+inherits = "dev"
+debug = false
