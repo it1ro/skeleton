@@ -30,6 +30,7 @@ interface Options {
   keep: boolean;
   uncapped: boolean;
   run: boolean;
+  scene: string;
   minFps?: number;
   out: string;
 }
@@ -49,8 +50,8 @@ function parseOptions(argv: string[]): Options {
   const options: Options = {
     host: process.env.BENCH_HOST ?? 'aio',
     sshConfig: process.env.BENCH_SSH_CONFIG,
-    httpPort: 18010,
-    cdpPort: 19222,
+    httpPort: 18011,
+    cdpPort: 19223,
     width: 1280,
     height: 720,
     seconds: 10,
@@ -61,6 +62,7 @@ function parseOptions(argv: string[]): Options {
     keep: false,
     uncapped: true,
     run: false,
+    scene: 'spawn',
     out: join(ROOT, 'bench-results'),
   };
   for (let i = 0; i < argv.length; i++) {
@@ -110,6 +112,9 @@ function parseOptions(argv: string[]): Options {
         options.run = true;
         if (options.name === 'spawn') options.name = 'run';
         break;
+      case '--scene':
+        options.scene = value()!;
+        break;
       case '--min-fps':
         options.minFps = Number(value());
         break;
@@ -139,6 +144,7 @@ function printHelp(): void {
   --pixels 0            full resolution instead of the half-resolution pixel look
   --vsync               measure with the display cap instead of uncapped
   --run                 run forward instead of standing still (chunk and grass streaming)
+  --scene <name>        camera target: spawn (default), water, sky
   --min-fps <n>         exit with code 1 if the measured fps is lower
   --no-build            reuse packages/client/dist
   --keep                leave the HTTP server and Chrome running
@@ -240,7 +246,8 @@ async function main(): Promise<void> {
     const url =
       `http://127.0.0.1:${options.httpPort}/?seed=${options.seed}&bench=${options.seconds}` +
       `&benchName=${encodeURIComponent(options.name)}${options.pixels ? '' : '&pixels=0'}` +
-      `${options.run ? '&benchRun' : ''}`;
+      `${options.run ? '&benchRun' : ''}` +
+      `${options.scene !== 'spawn' ? `&benchScene=${options.scene}` : ''}`;
     const chrome = [
       process.env.BENCH_PRIME_RUN ?? '/usr/local/bin/prime-run',
       process.env.BENCH_CHROME ?? '/usr/bin/google-chrome-stable',
@@ -379,6 +386,11 @@ async function main(): Promise<void> {
       `${fps.toFixed(1)} fps · p50 ${Number(result.p50).toFixed(1)} ms · p95 ${Number(result.p95).toFixed(1)} ms · ` +
         `${Number(result.frames)} frames`,
     );
+    console.log(
+      `cpu p50 ${Number(result.cpuP50).toFixed(1)} ms / p95 ${Number(result.cpuP95).toFixed(1)} ms · ` +
+        `render p50 ${Number(result.renderP50).toFixed(1)} ms / p95 ${Number(result.renderP95).toFixed(1)} ms`,
+    );
+    console.log(`calls ${result.calls} · triangles ${result.triangles} · scene ${String(result.scene)}${result.run ? ' (run)' : ''}`);
     const hitches = Array.isArray(result.hitches) ? (result.hitches as { kind: string; ms: number }[]) : [];
     console.log(`max ${Number(result.max).toFixed(1)} ms · hitches ${hitches.length} (>=8 ms)`);
     if (hitches.length) {
