@@ -48,6 +48,8 @@ declare global {
     __vision?: (vision: number) => number;
     /** Console handle for the water quality axis: `__water(0)` dead/murky, `__water(1)` live/clear. */
     __water?: (quality: number) => number;
+    /** Console handle for the shadow axis: `__shadow(0)` cheapest map, `__shadow(1)` the reference look. */
+    __shadow?: (quality: number) => number;
   }
 }
 try {
@@ -129,7 +131,17 @@ async function start(name: string): Promise<void> {
     env.waterQuality = quality;
     return env.waterQuality;
   };
+  // `?shadow=0.5` sets the shadow quality axis (0 — cheapest 512² over ±40 m, 1 — 2048² over ±70 m); `__shadow(q)` live.
+  const shadowParam = Number(params.get('shadow'));
+  if (params.has('shadow') && Number.isFinite(shadowParam)) env.shadowQuality = shadowParam;
   const chunks = new ChunkManager(seed);
+  // Trees outside the light's box cannot cast into it, so the chunk manager keeps them out of the shadow pass.
+  chunks.setShadowDistance(env.shadowCoverage);
+  window.__shadow = (quality: number) => {
+    env.shadowQuality = quality;
+    chunks.setShadowDistance(env.shadowCoverage);
+    return env.shadowQuality;
+  };
   const grass = new GrassField(terrain, seed, chunks);
   const remotes = new RemotePlayers(terrain);
   const local = new LocalPlayer(terrain, spawnState(terrain));
@@ -231,7 +243,12 @@ async function start(name: string): Promise<void> {
     const renderStart = performance.now();
     view.render(scene, camera);
     const renderMs = performance.now() - renderStart;
-    bench?.update(now, dt, { renderMs, calls: renderer.info.render.calls, triangles: renderer.info.render.triangles });
+    bench?.update(now, dt, {
+      renderMs,
+      calls: renderer.info.render.calls,
+      triangles: renderer.info.render.triangles,
+      casters: chunks.shadowCasters,
+    });
     input.endFrame();
 
     if (telemetry) {

@@ -124,6 +124,10 @@ export class ChunkManager {
   private readonly queue: ChunkData[] = [];
   /** Before the first `whenReady` everything is built at once; after it, chunks wait in the queue. */
   private streaming = false;
+  /** Trees farther than this (chunk distance, meters) stay out of the shadow pass: they cannot reach the box. */
+  private shadowDistance = Number.POSITIVE_INFINITY;
+  /** Instances at the front of the sorted tree pools that lie within `shadowDistance`; the shadow pass draws these. */
+  private casters = Number.POSITIVE_INFINITY;
   /** Scatter requests in flight per worker; at most one, and only while the worker has no pending chunk. */
   private readonly scatterBusy: number[] = [];
   private scatterSource: (() => [number, number, number] | null) | null = null;
@@ -136,6 +140,16 @@ export class ChunkManager {
     this.trunkPool.mesh.receiveShadow = true;
     this.crownPool.mesh.castShadow = true;
     this.crownPool.mesh.receiveShadow = true;
+    // The pools hold every loaded tree; the shadow pass draws only the near prefix (`casters`), because a tree
+    // outside the shadow box cannot cast into it. These hooks bracket that one render, so the color pass draws all.
+    for (const pool of [this.trunkPool, this.crownPool]) {
+      pool.mesh.onBeforeShadow = () => {
+        pool.mesh.count = Math.min(this.casters, pool.count);
+      };
+      pool.mesh.onAfterShadow = () => {
+        pool.mesh.count = pool.count;
+      };
+    }
     this.root.add(this.trunkPool.mesh, this.crownPool.mesh);
 
     for (let w = 0; w < WORKERS; w++) {
@@ -206,6 +220,11 @@ export class ChunkManager {
     return this.queue.length;
   }
 
+  /** Tree instances the shadow pass draws: the near prefix of the pools, not every loaded tree. */
+  get shadowCasters(): number {
+    return Math.min(this.casters, this.trunkPool.count);
+  }
+
   update(x: number, z: number): void {
     this.drain();
     const cx = Math.floor(x / CHUNK_SIZE);
@@ -213,17 +232,16 @@ export class ChunkManager {
     if (cx === this.center.cx && cz === this.center.cz) return;
     this.center = { cx, cz };
 
-    let removed = false;
     for (const [k, chunk] of this.chunks) {
       const [x0, z0] = k.split(',').map(Number);
       if (Math.max(Math.abs(x0 - cx), Math.abs(z0 - cz)) > UNLOAD_RADIUS) {
         this.dispose(chunk);
         this.chunks.delete(k);
-        removed = true;
       }
     }
     this.pump();
-    if (removed) this.rewriteTrees();
+    // Re-sort on every chunk move: the shadow pass draws the near prefix of the pools, so the order matters.
+    this.rewriteTrees();
   }
 
   /** Builds one queued chunk per frame, nearest first: a chunk boundary no longer lands in a single frame. */
@@ -318,6 +336,8 @@ export class ChunkManager {
       chunk.trees = trees;
       this.trunkPool.append(trees);
       this.crownPool.append(trees);
+      // Appends land at the end, so a chunk built inside the shadow box has to be sorted into the prefix.
+      if (this.withinShadow(data.cx, data.cz)) this.rewriteTrees();
     }
 
     chunk.group.position.set(data.cx * CHUNK_SIZE, 0, data.cz * CHUNK_SIZE);
@@ -334,13 +354,42 @@ export class ChunkManager {
     }
   }
 
-  /** Removed chunks leave gaps in the tree pools; rebuild them compactly once per unload. */
+  /** Sets the radius of tree shadows: the light's coverage plus a chunk of slack for the chunk-granular rebuild. */
+  setShadowDistance(coverage: number): void {
+    const next = Number.isFinite(coverage) ? Math.max(0, coverage) + CHUNK_SIZE : Number.POSITIVE_INFINITY;
+    if (next === this.shadowDistance) return;
+    this.shadowDistance = next;
+    if (this.chunks.size > 0) this.rewriteTrees();
+  }
+
+  /** True when the chunk lies close enough to the player to hold shadow casters. */
+  private withinShadow(cx: number, cz: number): boolean {
+    if (!Number.isFinite(this.center.cx)) return false;
+    return Math.max(Math.abs(cx - this.center.cx), Math.abs(cz - this.center.cz)) * CHUNK_SIZE <= this.shadowDistance;
+  }
+
+  /**
+   * Rewrites the tree pools compactly, nearest chunk first, and counts the prefix inside `shadowDistance`.
+   * The shadow pass draws only that prefix: far trees are not where the light's box is, so drawing them into
+   * the shadow map is pure vertex work.
+   */
   private rewriteTrees(): void {
-    const trees: PoolBlock[] = [];
-    for (const chunk of this.chunks.values()) {
-      if (chunk.trees) trees.push(chunk.trees);
+    const { cx, cz } = this.center;
+    const chunks: { distance: number; trees: PoolBlock }[] = [];
+    for (const [k, chunk] of this.chunks) {
+      if (!chunk.trees) continue;
+      const [x, z] = k.split(',').map(Number);
+      const distance = Number.isFinite(cx) ? Math.max(Math.abs(x - cx), Math.abs(z - cz)) * CHUNK_SIZE : 0;
+      chunks.push({ distance, trees: chunk.trees });
     }
-    this.trunkPool.rewrite(trees);
-    this.crownPool.rewrite(trees);
+    chunks.sort((a, b) => a.distance - b.distance);
+    const blocks = chunks.map((chunk) => chunk.trees);
+    this.trunkPool.rewrite(blocks);
+    this.crownPool.rewrite(blocks);
+    this.casters = 0;
+    for (const chunk of chunks) {
+      if (chunk.distance > this.shadowDistance) break;
+      this.casters += chunk.trees.matrix.length / 16;
+    }
   }
 }

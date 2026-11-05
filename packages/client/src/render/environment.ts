@@ -18,6 +18,7 @@ import {
 import type { Node } from 'three/webgpu';
 import { DAY_LENGTH, TICK_DT, WATER_LEVEL } from '@skeleton/shared';
 import { applyVision, clampVision } from './vision.ts';
+import { DEFAULT_SHADOW, shadowSettings, type ShadowSettings } from './shadow.ts';
 import {
   Fn,
   cameraPosition,
@@ -103,7 +104,6 @@ const waveField = Fn(([wxz]: [Node<'vec2'>]) => {
 });
 /** Server tick 0 starts at this time of day (0 = midnight, 0.25 = sunrise). */
 const START_TIME = 0.3;
-const SHADOW_SIZE = 70;
 /** Share of the light and sky brightness left at vision 0: the gray start is dim and foggy, not just colorless. */
 const VISION_DIM = 0.75;
 /** The disc sits inside the camera far plane but past the fog far; its material turns fog off. */
@@ -170,6 +170,9 @@ export class Environment {
   private readonly curveGain = uniform(1);
   timeOfDay = START_TIME;
   private vision = 1;
+  private shadowQualityValue = 1;
+  /** The shadow level in force. */
+  private shadow: ShadowSettings = DEFAULT_SHADOW;
 
   /** 0 — gray world before the eyes, 1 — the normal world. Clamped, so the caller cannot break the colors. */
   get visionState(): number {
@@ -178,6 +181,21 @@ export class Environment {
 
   set visionState(value: number) {
     this.vision = clampVision(value);
+  }
+
+  /** 0 — the cheapest 512² map over ±40 m, 1 — the reference 2048² over ±70 m. Clamped like `visionState`. */
+  get shadowQuality(): number {
+    return this.shadowQualityValue;
+  }
+
+  set shadowQuality(value: number) {
+    this.shadowQualityValue = clampVision(value);
+    this.applyShadow(shadowSettings(this.shadowQualityValue));
+  }
+
+  /** Half-extent of the shadow camera box, meters: casters farther away cannot reach into it. */
+  get shadowCoverage(): number {
+    return this.shadow.coverage;
   }
 
   /** 0 — мёртвая вода (мутная, плотная), 1 — живая (чистая, прозрачная). Clamped like `visionState`. */
@@ -226,14 +244,14 @@ export class Environment {
     })();
 
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
     const cam = this.sun.shadow.camera;
-    cam.left = cam.bottom = -SHADOW_SIZE;
-    cam.right = cam.top = SHADOW_SIZE;
     cam.near = 1;
     cam.far = 400;
     this.sun.shadow.bias = -0.0005;
     this.sun.shadow.normalBias = 0.05;
+    // Map size and coverage are the runtime axis (render/shadow.ts), so a bench or the player can trade
+    // shadow sharpness for frame time without a rebuild.
+    this.applyShadow(DEFAULT_SHADOW);
     // Stylized water (see issue #39): vertex waves + fresnel + procedural ripple, gated by distance. No
     // reflections and no refraction. The colors are raw: the output node applies `visionState` once, like grass.
     const waterDead = uniform(new Color(WATER_DEAD));
@@ -278,6 +296,17 @@ export class Environment {
     scene.add(this.sun, this.sun.target, this.hemi, this.ambient, this.water, this.disc);
     // Fog: near flat far water and the far ring of terrain/trees, so the horizon melts into the sky.
     scene.fog = this.fog;
+  }
+
+  /** Applies a shadow level: map resolution and box. Safe to call live, the shadow node follows the light. */
+  private applyShadow(settings: ShadowSettings): void {
+    this.shadow = settings;
+    const cam = this.sun.shadow.camera;
+    cam.left = cam.bottom = -settings.coverage;
+    cam.right = cam.top = settings.coverage;
+    cam.updateProjectionMatrix();
+    // The shadow node reallocates the map on the next shadow render when the size changes.
+    this.sun.shadow.mapSize.set(settings.mapSize, settings.mapSize);
   }
 
   update(serverTick: number, focusX: number, focusY: number, focusZ: number): void {

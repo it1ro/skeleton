@@ -28,6 +28,7 @@ interface Options {
   pixels: boolean;
   vision?: number;
   water?: number;
+  shadow?: number;
   build: boolean;
   keep: boolean;
   uncapped: boolean;
@@ -113,6 +114,12 @@ function parseOptions(argv: string[]): Options {
           throw new Error('--water takes a number from 0 (dead/murky) to 1 (live/clear)');
         }
         break;
+      case '--shadow':
+        options.shadow = Number(value());
+        if (!Number.isFinite(options.shadow) || options.shadow < 0 || options.shadow > 1) {
+          throw new Error('--shadow takes a number from 0 (cheapest 512² over ±40 m) to 1 (2048² over ±70 m)');
+        }
+        break;
       case '--no-build':
         options.build = false;
         break;
@@ -158,6 +165,7 @@ function printHelp(): void {
   --pixels 0            full resolution instead of the half-resolution pixel look
   --vision <0..1>       gray→color hook: 0 for the gray start, 1 for full color (default: 1)
   --water <0..1>        water quality axis: 0 dead/murky, 1 live/clear (default: 0.6)
+  --shadow <0..1>       shadow quality axis: 0 cheapest, 1 reference 2048² over ±70 m (default: 1)
   --vsync               measure with the display cap instead of uncapped
   --run                 run forward instead of standing still (chunk and grass streaming)
   --scene <name>        camera target: spawn (default), water, sky
@@ -265,7 +273,8 @@ async function main(): Promise<void> {
       `${options.run ? '&benchRun' : ''}` +
       `${options.scene !== 'spawn' ? `&benchScene=${options.scene}` : ''}` +
       `${options.vision !== undefined ? `&vision=${options.vision}` : ''}` +
-      `${options.water !== undefined ? `&water=${options.water}` : ''}`;
+      `${options.water !== undefined ? `&water=${options.water}` : ''}` +
+      `${options.shadow !== undefined ? `&shadow=${options.shadow}` : ''}`;
     const chrome = [
       process.env.BENCH_PRIME_RUN ?? '/usr/local/bin/prime-run',
       process.env.BENCH_CHROME ?? '/usr/bin/google-chrome-stable',
@@ -394,6 +403,7 @@ async function main(): Promise<void> {
       pixels: options.pixels,
       vision: options.vision ?? 1,
       water: options.water ?? 0.6,
+      shadow: options.shadow ?? 1,
     };
     writeFileSync(`${base}.json`, `${JSON.stringify(report, null, 2)}\n`);
     if (screenshot) writeFileSync(`${base}.png`, Buffer.from(screenshot, 'base64'));
@@ -410,7 +420,10 @@ async function main(): Promise<void> {
       `cpu p50 ${Number(result.cpuP50).toFixed(1)} ms / p95 ${Number(result.cpuP95).toFixed(1)} ms · ` +
         `render p50 ${Number(result.renderP50).toFixed(1)} ms / p95 ${Number(result.renderP95).toFixed(1)} ms`,
     );
-    console.log(`calls ${result.calls} · triangles ${result.triangles} · scene ${String(result.scene)}${result.run ? ' (run)' : ''}`);
+    console.log(
+      `calls ${result.calls} · triangles ${result.triangles} · casters ${String(result.casters)} · ` +
+        `scene ${String(result.scene)}${result.run ? ' (run)' : ''}`,
+    );
     const hitches = Array.isArray(result.hitches) ? (result.hitches as { kind: string; ms: number }[]) : [];
     console.log(`max ${Number(result.max).toFixed(1)} ms · hitches ${hitches.length} (>=8 ms)`);
     if (hitches.length) {
