@@ -17,6 +17,7 @@ import {
   Vector3,
 } from 'three/webgpu';
 import { CHUNK_SEGMENTS, CHUNK_SIZE } from '@skeleton/shared';
+import { recordHitch } from '../bench/hitches.ts';
 import type { ChunkData, ChunkRequest } from './terrain.worker.ts';
 
 const VIEW_RADIUS = 6; // chunks
@@ -114,6 +115,9 @@ export class ChunkManager {
   private readonly crownMaterial = new MeshStandardMaterial({ color: 0x2f5a2a, roughness: 1, flatShading: true });
   private center = { cx: Number.NaN, cz: Number.NaN };
   private waiters: { radius: number; resolve: () => void }[] = [];
+  private readonly queue: ChunkData[] = [];
+  /** Before the first `whenReady` everything is built at once; after it, chunks wait in the queue. */
+  private streaming = false;
 
   constructor(private readonly seed: number) {
     for (let w = 0; w < WORKERS; w++) {
@@ -139,6 +143,7 @@ export class ChunkManager {
   private checkWaiters(): void {
     this.waiters = this.waiters.filter((w) => {
       if (!this.readyAround(w.radius)) return true;
+      this.streaming = true;
       w.resolve();
       return false;
     });
@@ -162,6 +167,7 @@ export class ChunkManager {
   }
 
   update(x: number, z: number): void {
+    this.drain();
     const cx = Math.floor(x / CHUNK_SIZE);
     const cz = Math.floor(z / CHUNK_SIZE);
     if (cx === this.center.cx && cz === this.center.cz) return;
@@ -175,6 +181,25 @@ export class ChunkManager {
       }
     }
     this.pump();
+  }
+
+  /** Builds one queued chunk per frame, nearest first: a chunk boundary no longer lands in a single frame. */
+  private drain(): void {
+    if (this.queue.length === 0) return;
+    const { cx, cz } = this.center;
+    let best = 0;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < this.queue.length; i++) {
+      const dx = this.queue[i].cx - cx;
+      const dz = this.queue[i].cz - cz;
+      const distance = dx * dx + dz * dz;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = i;
+      }
+    }
+    const [data] = this.queue.splice(best, 1);
+    this.build(data);
   }
 
   /** Sends the nearest missing chunks to free workers. */
@@ -199,8 +224,17 @@ export class ChunkManager {
   }
 
   private onChunk(data: ChunkData): void {
+    if (this.streaming) {
+      this.queue.push(data);
+      return;
+    }
+    this.build(data);
+  }
+
+  private build(data: ChunkData): void {
     const chunk = this.chunks.get(key(data.cx, data.cz));
     if (!chunk) return; // Unloaded while it was being built.
+    const startedAt = performance.now();
 
     const geometry = new BufferGeometry();
     geometry.setIndex(new BufferAttribute(this.index, 1));
@@ -238,6 +272,7 @@ export class ChunkManager {
     chunk.ready = true;
     this.root.add(chunk.group);
     this.checkWaiters();
+    recordHitch('chunk', startedAt);
   }
 
   private dispose(chunk: Chunk): void {

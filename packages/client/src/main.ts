@@ -28,8 +28,16 @@ const localSeed = Number.isFinite(seedParam) ? seedParam : DEFAULT_SEED;
 
 // `?bench` starts the game without the menu and measures a fixed camera path. See `scripts/bench-aio.ts`.
 const benchParam = params.get('bench');
+const benchRun = params.has('benchRun');
 const benchSeconds = benchParam && Number.isFinite(Number(benchParam)) ? Number(benchParam) : 10;
-const bench = benchParam === null ? null : createBench({ seconds: benchSeconds, name: params.get('benchName') ?? 'spawn' });
+const bench =
+  benchParam === null
+    ? null
+    : createBench({
+        seconds: benchSeconds,
+        name: params.get('benchName') ?? (benchRun ? 'run' : 'spawn'),
+        run: benchRun,
+      });
 try {
   nameInput.value = localStorage.getItem(NAME_KEY) ?? '';
 } catch {
@@ -103,7 +111,7 @@ async function start(name: string): Promise<void> {
   await Promise.all([avatarsLoaded, chunks.whenReady(START_CHUNKS)]);
   const me = new Avatar(name || 'Я', 0xd9a441);
   scene.add(chunks.root, remotes.root, me.root, grass.root);
-  grass.update(local.state.x, local.state.z);
+  grass.update(local.state.x, local.state.z, true);
   if (bench) bench.attach({ view, chunks, orbit, terrain, seed });
   const povituha = new PovituhaFigure(terrain, scene, 3.4, -4.6);
   const talk = new TalkPanel({
@@ -154,15 +162,17 @@ async function start(name: string): Promise<void> {
     const serverTick = snapTick + ((now - snapTime) / 1000) * TICK_RATE;
 
     if (input.consume('KeyP')) view.togglePixels();
+    const autoRun = bench?.running ?? false;
+    const moveYaw = autoRun ? (bench?.yaw ?? orbit.yaw) : orbit.yaw;
     accumulator += dt;
     while (accumulator >= TICK_DT) {
       accumulator -= TICK_DT;
       local.step({
-        forward: input.axis('KeyS', 'KeyW'),
-        right: input.axis('KeyA', 'KeyD'),
-        yaw: orbit.yaw,
-        jump: input.down('Space'),
-        sprint: input.down('ShiftLeft') || input.down('ShiftRight'),
+        forward: autoRun ? 1 : input.axis('KeyS', 'KeyW'),
+        right: autoRun ? 0 : input.axis('KeyA', 'KeyD'),
+        yaw: moveYaw,
+        jump: autoRun ? false : input.down('Space'),
+        sprint: autoRun || input.down('ShiftLeft') || input.down('ShiftRight'),
       });
     }
     const outbox = local.takeOutbox();

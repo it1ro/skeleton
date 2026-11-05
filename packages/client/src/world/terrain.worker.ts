@@ -81,7 +81,7 @@ self.onmessage = (e: MessageEvent<ChunkRequest>) => {
       normals[k + 2] = nz / len;
 
       const slope = 1 - ny / len;
-      const biome = t.biomeAt(wx, wz);
+      const biome = t.biomeAt(wx, wz, h);
       let c: [number, number, number] = PALETTE[biome];
       if (h > 62) c = PALETTE.snow;
       else if (slope > 0.25 && biome !== 'ocean') c = PALETTE.rock;

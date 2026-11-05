@@ -19,7 +19,8 @@ export interface TreeSpot {
 export interface Terrain {
   readonly seed: number;
   heightAt(x: number, z: number): number;
-  biomeAt(x: number, z: number): Biome;
+  /** Pass `height` when the caller already sampled it; avoids a second expensive noise lookup. */
+  biomeAt(x: number, z: number, height?: number): Biome;
   treesInChunk(cx: number, cz: number): TreeSpot[];
 }
 
@@ -65,8 +66,8 @@ export function createTerrain(seed: number): Terrain {
     return wild * (1 - calm) + (6 + hills * 4) * calm;
   }
 
-  function biomeAt(x: number, z: number): Biome {
-    const h = heightAt(x, z);
+  function biomeAt(x: number, z: number, height?: number): Biome {
+    const h = height === undefined ? heightAt(x, z) : height;
     if (h < WATER_LEVEL - 0.5) return 'ocean';
     if (h < WATER_LEVEL + 1.5) return 'beach';
     if (h > 38) return 'mountain';
