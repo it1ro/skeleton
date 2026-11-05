@@ -4,3 +4,4 @@ export * from './terrain.ts';
 export * from './movement.ts';
 export * from './protocol.ts';
 export * from './sim.ts';
+export * from './npc/index.ts';

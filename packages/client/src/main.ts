@@ -7,6 +7,8 @@ import { Avatar, RemotePlayers, preloadAvatars } from './world/avatars.ts';
 import { Input } from './player/input.ts';
 import { OrbitCamera } from './player/camera.ts';
 import { LocalPlayer } from './player/local.ts';
+import { PovituhaFigure } from './npc/figure.ts';
+import { TalkPanel } from './npc/panel.ts';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const menu = document.getElementById('menu')!;
@@ -37,8 +39,14 @@ const input = new Input(canvas);
 let started = false;
 /** The menu stays up while the world loads, even with the pointer locked. */
 let loaded = false;
+/** The talk panel is open: the menu must stay hidden even though the pointer is unlocked. */
+let dialogueOpen = false;
 
-document.addEventListener('pointerlockchange', () => menu.classList.toggle('hidden', input.locked && loaded));
+function syncMenu(): void {
+  menu.classList.toggle('hidden', (input.locked || dialogueOpen) && loaded);
+}
+
+document.addEventListener('pointerlockchange', syncMenu);
 
 form.addEventListener('submit', (e) => {
   e.preventDefault();
@@ -75,12 +83,26 @@ async function start(name: string): Promise<void> {
   await Promise.all([avatarsLoaded, chunks.whenReady(START_CHUNKS)]);
   const me = new Avatar(name || 'Я', 0xd9a441);
   scene.add(chunks.root, remotes.root, me.root);
+  const povituha = new PovituhaFigure(terrain, scene, 3.4, -4.6);
+  const talk = new TalkPanel({
+    llm: params.get('npc') === 'llm',
+    onClose: () => {
+      dialogueOpen = false;
+      input.lock();
+      syncMenu();
+    },
+  });
+  const talkPrompt = document.createElement('div');
+  talkPrompt.id = 'talk-prompt';
+  talkPrompt.textContent = 'E — говорить';
+  talkPrompt.className = 'hidden';
+  document.body.append(talkPrompt);
 
   loaded = true;
   status.textContent = '';
   nameInput.hidden = true;
   form.querySelector('button')!.textContent = 'Продолжить';
-  menu.classList.toggle('hidden', input.locked);
+  syncMenu();
 
   let snapTick = conn.welcome.tick;
   let snapTime = performance.now();
@@ -127,11 +149,22 @@ async function start(name: string): Promise<void> {
     const pos = local.renderPosition(accumulator / TICK_DT, dt);
     me.place(pos.x, pos.y, pos.z, pos.x - prevPos.x, pos.z - prevPos.z, local.speed, moveMode(pos.x, pos.y, pos.z, terrain), dt);
     prevPos = pos;
+
+    const near = povituha.distanceTo(pos.x, pos.z) < 3.6;
+    talkPrompt.classList.toggle('hidden', !near || talk.isOpen);
+    if (near && !talk.isOpen && input.consume('KeyE')) {
+      dialogueOpen = true;
+      document.exitPointerLock();
+      syncMenu();
+      talk.open();
+    }
+
     orbit.update(input, pos.x, pos.y, pos.z);
     chunks.update(pos.x, pos.z);
     env.update(serverTick, pos.x, pos.y, pos.z);
     remotes.update(serverTick, dt, camera, window.innerWidth, window.innerHeight);
     me.updateLabel(camera, window.innerWidth, window.innerHeight);
+    povituha.updateLabel(camera, window.innerWidth, window.innerHeight);
 
     renderer.render(scene, camera);
     input.endFrame();
