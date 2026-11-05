@@ -27,7 +27,9 @@ describe('clampVision', () => {
 
   it('treats a broken value as gray, not as color', () => {
     expect(clampVision(Number.NaN)).toBe(0);
-    expect(clampVision(Number.POSITIVE_INFINITY)).toBe(1);
+    expect(clampVision(Number.POSITIVE_INFINITY)).toBe(0);
+    expect(clampVision(Number.NEGATIVE_INFINITY)).toBe(0);
+    expect(clampVision(undefined as unknown as number)).toBe(0);
   });
 });
 

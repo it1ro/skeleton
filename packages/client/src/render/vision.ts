@@ -18,9 +18,9 @@ export interface Rgb {
   setRGB(r: number, g: number, b: number): unknown;
 }
 
-/** Clamps vision to [0, 1]; not a number counts as 0 (gray), the state the world starts in. */
+/** Clamps vision to [0, 1]; anything that is not a finite number counts as 0 (gray), the state the world starts in. */
 export function clampVision(value: number): number {
-  if (Number.isNaN(value)) return 0;
+  if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));
 }
 
