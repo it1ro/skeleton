@@ -112,6 +112,7 @@ async function start(name: string): Promise<void> {
   if (params.get('pixels') === '0') view.togglePixels();
 
   const env = new Environment(scene);
+  view.setOutputNode(env.outputNode);
   // `?vision=0` opens the game in the gray start; `__vision(1)` in the console brings the color back.
   const visionParam = Number(params.get('vision'));
   if (params.has('vision') && Number.isFinite(visionParam)) env.visionState = visionParam;
@@ -219,7 +220,7 @@ async function start(name: string): Promise<void> {
     povituha.updateLabel(camera, window.innerWidth, window.innerHeight);
 
     const renderStart = performance.now();
-    renderer.render(scene, camera);
+    view.render(scene, camera);
     const renderMs = performance.now() - renderStart;
     bench?.update(now, dt, { renderMs, calls: renderer.info.render.calls, triangles: renderer.info.render.triangles });
     input.endFrame();

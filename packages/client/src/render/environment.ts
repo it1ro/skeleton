@@ -1,5 +1,7 @@
 import {
+  AdditiveBlending,
   AmbientLight,
+  CanvasTexture,
   Color,
   DirectionalLight,
   Fog,
@@ -7,14 +9,34 @@ import {
   Mesh,
   MeshStandardMaterial,
   PlaneGeometry,
+  Sprite,
+  SpriteMaterial,
+  SRGBColorSpace,
   type Scene,
 } from 'three/webgpu';
+import type { Node } from 'three/webgpu';
 import { DAY_LENGTH, TICK_DT, WATER_LEVEL } from '@skeleton/shared';
 import { applyVision, clampVision } from './vision.ts';
+import {
+  Fn,
+  cameraWorldMatrix,
+  mix,
+  output,
+  positionViewDirection,
+  smoothstep,
+  transformDirection,
+  uniform,
+  vec3,
+  vec4,
+} from 'three/tsl';
 
 const SKY_DAY = new Color(0x9cc4e4);
 const SKY_DUSK = new Color(0xd88a5a);
 const SKY_NIGHT = new Color(0x0c1424);
+/** Richer zenith colors: the top of the sky is more saturated than the foggy horizon. */
+const ZENITH_DAY = new Color(0x3d7eb8);
+const ZENITH_DUSK = new Color(0x8a4a6e);
+const ZENITH_NIGHT = new Color(0x040810);
 const SUN_DAY = new Color(0xfff1d6);
 const SUN_DUSK = new Color(0xffa060);
 const MOON = new Color(0x6f86b8);
@@ -27,6 +49,33 @@ const START_TIME = 0.3;
 const SHADOW_SIZE = 70;
 /** Share of the light and sky brightness left at vision 0: the gray start is dim and foggy, not just colorless. */
 const VISION_DIM = 0.75;
+/** The disc sits inside the camera far plane but past the fog far; its material turns fog off. */
+const DISC_DISTANCE = 850;
+const DISC_SIZE_SUN = 80;
+const DISC_SIZE_MOON = 55;
+/** Subtle final S-curve contrast (0 = off). */
+const CURVE_CONTRAST = 0.2;
+/** How much the night grade darkens the final image (0 = off, 1 = fully dark). */
+const CURVE_NIGHT_GAIN = 0.86;
+
+/** A soft white radial disc: a bright core fading to transparent. Additive blending turns it into a glow. */
+function makeDiscTexture(): CanvasTexture {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const half = size / 2;
+  const gradient = ctx.createRadialGradient(half, half, 0, half, half, half);
+  gradient.addColorStop(0, 'rgba(255,255,255,1)');
+  gradient.addColorStop(0.4, 'rgba(255,255,255,1)');
+  gradient.addColorStop(0.75, 'rgba(255,255,255,0.3)');
+  gradient.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
+  return texture;
+}
 
 /**
  * Sun, moon, sky color, fog and water. Time of day comes from the server tick, so all players share it.
@@ -39,9 +88,12 @@ export class Environment {
   private readonly hemi = new HemisphereLight(HEMI_SKY, HEMI_GROUND, 1);
   private readonly ambient = new AmbientLight(AMBIENT, 0.3);
   private readonly fog = new Fog(SKY_DAY.clone(), 60, 380);
+  /** Sky color from the time of day before `visionState` fades it; also the fog and the gradient horizon. */
   private readonly sky = SKY_DAY.clone();
-  /** Sky color from the time of day before `visionState` fades it. */
   private readonly skyBase = SKY_DAY.clone();
+  /** Saturated zenith color of the gradient, from the time of day before `visionState` fades it. */
+  private readonly zenith = ZENITH_DAY.clone();
+  private readonly zenithBase = ZENITH_DAY.clone();
   private readonly waterMaterial = new MeshStandardMaterial({
     color: WATER,
     roughness: 0.15,
@@ -50,6 +102,12 @@ export class Environment {
     opacity: 0.82,
   });
   private readonly water = new Mesh(new PlaneGeometry(1200, 1200).rotateX(-Math.PI / 2), this.waterMaterial);
+  private readonly disc: Sprite;
+  /** Final color curve, applied inline by the render pipeline. */
+  readonly outputNode: Node;
+  private readonly curveVision = uniform(1);
+  private readonly curveContrast = uniform(CURVE_CONTRAST);
+  private readonly curveGain = uniform(1);
   timeOfDay = START_TIME;
   private vision = 1;
 
@@ -63,8 +121,40 @@ export class Environment {
   }
 
   constructor(scene: Scene) {
-    scene.background = this.sky;
-    scene.fog = this.fog;
+    // Sky gradient: horizon matches the fog color so there is no seam where the two meet. Both are fed the
+    // same raw color values and go through the same tone mapping, so they stay in lock-step.
+    const horizon = uniform(this.sky);
+    const zenithUniform = uniform(this.zenith);
+    scene.backgroundNode = Fn(() => {
+      const worldDir = transformDirection(positionViewDirection, cameraWorldMatrix);
+      const t = smoothstep(0.0, 0.6, worldDir.y);
+      return mix(horizon, zenithUniform, t);
+    })();
+
+    // Sun/moon disc: a billboard quad that follows the sun by day and the moon (opposite) by night.
+    this.disc = new Sprite(
+      new SpriteMaterial({
+        map: makeDiscTexture(),
+        blending: AdditiveBlending,
+        transparent: true,
+        depthWrite: false,
+        fog: false,
+      }),
+    );
+    this.disc.scale.set(DISC_SIZE_SUN, DISC_SIZE_SUN, 1);
+
+    // Color curve: desaturate toward gray as vision falls, then a subtle S-curve and a night gain.
+    this.outputNode = Fn(() => {
+      const c = output.rgb;
+      const luma = c.r.mul(0.2126).add(c.g.mul(0.7152)).add(c.b.mul(0.0722));
+      let col = mix(vec3(luma), c, this.curveVision);
+      const x = col.clamp(0.0, 1.0);
+      const s = x.mul(x).mul(3.0).sub(x.mul(x).mul(x).mul(2.0));
+      col = mix(col, s, this.curveContrast);
+      col = col.mul(this.curveGain);
+      return vec4(col, output.a);
+    })();
+
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
     const cam = this.sun.shadow.camera;
@@ -76,7 +166,7 @@ export class Environment {
     this.sun.shadow.normalBias = 0.05;
     this.water.position.y = WATER_LEVEL;
     this.water.receiveShadow = true;
-    scene.add(this.sun, this.sun.target, this.hemi, this.ambient, this.water);
+    scene.add(this.sun, this.sun.target, this.hemi, this.ambient, this.water, this.disc);
   }
 
   update(serverTick: number, focusX: number, focusY: number, focusZ: number): void {
@@ -105,14 +195,37 @@ export class Environment {
     applyVision(this.ambient.color, vision);
     this.ambient.intensity = 0.3 * dim;
 
+    // Horizon (fog) and zenith colors: the gradient reads these uniforms, so they update in lock-step.
     this.skyBase.copy(SKY_NIGHT).lerp(SKY_DUSK, Math.min(1, day * 2)).lerp(SKY_DAY, day * (1 - dusk * 0.7));
     this.sky.copy(this.skyBase);
     applyVision(this.sky, vision);
     this.sky.multiplyScalar(dim);
     this.fog.color.copy(this.sky);
 
+    this.zenithBase.copy(ZENITH_NIGHT).lerp(ZENITH_DUSK, Math.min(1, day * 2)).lerp(ZENITH_DAY, day * (1 - dusk * 0.7));
+    this.zenith.copy(this.zenithBase);
+    applyVision(this.zenith, vision);
+    this.zenith.multiplyScalar(dim);
+
     this.waterMaterial.color.copy(WATER);
     applyVision(this.waterMaterial.color, vision);
+
+    // Sun/moon disc: the visible body is above the horizon; the sun by day, the moon by night.
+    const sunElev = Math.sin(angle);
+    const discElev = Math.abs(sunElev);
+    const discAz = sunElev >= 0 ? Math.cos(angle) : -Math.cos(angle);
+    const discFade = smooth(0.0, 0.12, discElev);
+    this.disc.position.set(focusX + discAz * DISC_DISTANCE, focusY + discElev * DISC_DISTANCE, focusZ);
+    const discSize = DISC_SIZE_MOON + (DISC_SIZE_SUN - DISC_SIZE_MOON) * day;
+    this.disc.scale.set(discSize, discSize, 1);
+    this.disc.material.color.copy(MOON).lerp(SUN_DUSK, day).lerp(SUN_DAY, day * (1 - dusk));
+    applyVision(this.disc.material.color, vision);
+    this.disc.material.opacity = discFade * dim * 0.7;
+
+    // Final color curve: vision drives the gray, night (1 - day) darkens the frame a touch.
+    this.curveVision.value = vision;
+    this.curveContrast.value = CURVE_CONTRAST;
+    this.curveGain.value = 1 - (1 - CURVE_NIGHT_GAIN) * (1 - day);
 
     // Snap to a grid so the water plane does not swim with the camera.
     this.water.position.x = Math.round(focusX / 50) * 50;
