@@ -12,10 +12,10 @@ import {
   RepeatWrapping,
   SRGBColorSpace,
 } from 'three/webgpu';
-import { CHUNK_SEGMENTS, CHUNK_SIZE } from '@skeleton/shared';
+import { CHUNK_SEGMENTS, CHUNK_SIZE, type ScatterData } from '@skeleton/shared';
 import { recordHitch } from '../bench/hitches.ts';
 import { composeInstance, InstancedPool, type PoolBlock } from './instanced-pool.ts';
-import type { ChunkData, ChunkRequest } from './terrain.worker.ts';
+import type { ChunkData, WorkerRequest, WorkerResponse } from './terrain.worker.ts';
 
 const VIEW_RADIUS = 6; // chunks
 const UNLOAD_RADIUS = VIEW_RADIUS + 2;
@@ -124,6 +124,10 @@ export class ChunkManager {
   private readonly queue: ChunkData[] = [];
   /** Before the first `whenReady` everything is built at once; after it, chunks wait in the queue. */
   private streaming = false;
+  /** Scatter requests in flight per worker; at most one, and only while the worker has no pending chunk. */
+  private readonly scatterBusy: number[] = [];
+  private scatterSource: (() => [number, number] | null) | null = null;
+  private scatterSink: ((data: ScatterData) => void) | null = null;
 
   constructor(private readonly seed: number) {
     this.trunkPool = new InstancedPool(this.trunkGeometry, this.trunkMaterial, TREE_CAPACITY, false);
@@ -136,14 +140,32 @@ export class ChunkManager {
 
     for (let w = 0; w < WORKERS; w++) {
       const worker = new Worker(new URL('./terrain.worker.ts', import.meta.url), { type: 'module' });
-      worker.onmessage = (e: MessageEvent<ChunkData>) => {
-        this.busy[w]--;
-        this.onChunk(e.data);
+      worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
+        const data = e.data;
+        if (data.type === 'chunk') {
+          this.busy[w]--;
+          this.onChunk(data);
+        } else {
+          this.scatterBusy[w]--;
+          this.scatterSink?.(data);
+        }
         this.pump();
       };
       this.workers.push(worker);
       this.busy.push(0);
+      this.scatterBusy.push(0);
     }
+  }
+
+  /** Registers the grass field's pull/push callbacks: a tile source for free workers and a result sink. */
+  setScatterHandlers(source: () => [number, number] | null, sink: (data: ScatterData) => void): void {
+    this.scatterSource = source;
+    this.scatterSink = sink;
+  }
+
+  /** Tells free workers to pick up any scatter tiles the grass field is waiting for. */
+  submitScatter(): void {
+    this.pumpScatter();
   }
 
   /** Resolves once every chunk within `radius` chunks of the current center is built. Call after `update`. */
@@ -239,7 +261,22 @@ export class ChunkManager {
       if (this.busy[w] >= IN_FLIGHT_PER_WORKER) break;
       this.busy[w]++;
       this.chunks.set(key(x, z), { group: new Group(), ready: false, trees: null });
-      const req: ChunkRequest = { seed: this.seed, cx: x, cz: z };
+      const req: WorkerRequest = { type: 'chunk', seed: this.seed, cx: x, cz: z };
+      this.workers[w].postMessage(req);
+    }
+    this.pumpScatter();
+  }
+
+  /** Submits scatter tiles to workers that have no pending chunk and no scatter in flight. */
+  private pumpScatter(): void {
+    if (!this.scatterSource) return;
+    for (let w = 0; w < WORKERS; w++) {
+      if (this.busy[w] > 0 || this.scatterBusy[w] > 0) continue;
+      const tile = this.scatterSource();
+      if (!tile) break;
+      const [tx, tz] = tile;
+      this.scatterBusy[w]++;
+      const req: WorkerRequest = { type: 'scatter', seed: this.seed, tx, tz };
       this.workers[w].postMessage(req);
     }
   }

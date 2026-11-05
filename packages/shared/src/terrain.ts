@@ -84,12 +84,13 @@ export function createTerrain(seed: number): Terrain {
       const scale = 0.7 + r() * 0.6;
       const rotation = r() * Math.PI * 2;
       const roll = r();
-      const biome = biomeAt(x, z);
+      const h = heightAt(x, z);
+      const biome = biomeAt(x, z, h);
       const density = biome === 'forest' ? 0.55 : biome === 'meadows' ? 0.04 : 0;
       if (roll >= density) continue;
       // Keep the spawn point clear.
       if (x * x + z * z < 12 * 12) continue;
-      trees.push({ x, y: heightAt(x, z), z, scale, rotation });
+      trees.push({ x, y: h, z, scale, rotation });
     }
     return trees;
   }
