@@ -29,6 +29,7 @@ interface Options {
   build: boolean;
   keep: boolean;
   uncapped: boolean;
+  run: boolean;
   minFps?: number;
   out: string;
 }
@@ -59,6 +60,7 @@ function parseOptions(argv: string[]): Options {
     build: true,
     keep: false,
     uncapped: true,
+    run: false,
     out: join(ROOT, 'bench-results'),
   };
   for (let i = 0; i < argv.length; i++) {
@@ -104,6 +106,10 @@ function parseOptions(argv: string[]): Options {
       case '--vsync':
         options.uncapped = false;
         break;
+      case '--run':
+        options.run = true;
+        if (options.name === 'spawn') options.name = 'run';
+        break;
       case '--min-fps':
         options.minFps = Number(value());
         break;
@@ -132,6 +138,7 @@ function printHelp(): void {
   --width/--height      viewport (default: 1280x720)
   --pixels 0            full resolution instead of the half-resolution pixel look
   --vsync               measure with the display cap instead of uncapped
+  --run                 run forward instead of standing still (chunk and grass streaming)
   --min-fps <n>         exit with code 1 if the measured fps is lower
   --no-build            reuse packages/client/dist
   --keep                leave the HTTP server and Chrome running
@@ -232,7 +239,8 @@ async function main(): Promise<void> {
 
     const url =
       `http://127.0.0.1:${options.httpPort}/?seed=${options.seed}&bench=${options.seconds}` +
-      `&benchName=${encodeURIComponent(options.name)}${options.pixels ? '' : '&pixels=0'}`;
+      `&benchName=${encodeURIComponent(options.name)}${options.pixels ? '' : '&pixels=0'}` +
+      `${options.run ? '&benchRun' : ''}`;
     const chrome = [
       process.env.BENCH_PRIME_RUN ?? '/usr/local/bin/prime-run',
       process.env.BENCH_CHROME ?? '/usr/bin/google-chrome-stable',
@@ -371,6 +379,12 @@ async function main(): Promise<void> {
       `${fps.toFixed(1)} fps · p50 ${Number(result.p50).toFixed(1)} ms · p95 ${Number(result.p95).toFixed(1)} ms · ` +
         `${Number(result.frames)} frames`,
     );
+    const hitches = Array.isArray(result.hitches) ? (result.hitches as { kind: string; ms: number }[]) : [];
+    console.log(`max ${Number(result.max).toFixed(1)} ms · hitches ${hitches.length} (>=8 ms)`);
+    if (hitches.length) {
+      const worst = [...hitches].sort((a, b) => b.ms - a.ms).slice(0, 6);
+      console.log(`worst: ${worst.map((hitch) => `${hitch.kind} ${hitch.ms.toFixed(1)}`).join(', ')}`);
+    }
     console.log(`saved ${base}.json`);
     if (screenshot) console.log(`saved ${base}.png`);
     if (options.minFps !== undefined && fps < options.minFps) {

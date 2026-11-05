@@ -17,6 +17,7 @@ import {
   Vector3,
 } from 'three/webgpu';
 import { CHUNK_SEGMENTS, CHUNK_SIZE } from '@skeleton/shared';
+import { recordHitch } from '../bench/hitches.ts';
 import type { ChunkData, ChunkRequest } from './terrain.worker.ts';
 
 const VIEW_RADIUS = 6; // chunks
@@ -201,6 +202,7 @@ export class ChunkManager {
   private onChunk(data: ChunkData): void {
     const chunk = this.chunks.get(key(data.cx, data.cz));
     if (!chunk) return; // Unloaded while it was being built.
+    const startedAt = performance.now();
 
     const geometry = new BufferGeometry();
     geometry.setIndex(new BufferAttribute(this.index, 1));
@@ -238,6 +240,7 @@ export class ChunkManager {
     chunk.ready = true;
     this.root.add(chunk.group);
     this.checkWaiters();
+    recordHitch('chunk', startedAt);
   }
 
   private dispose(chunk: Chunk): void {

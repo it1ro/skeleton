@@ -3,6 +3,7 @@ import type { OrbitCamera } from '../player/camera.ts';
 import type { View } from '../render/renderer.ts';
 import type { ChunkManager } from '../world/chunks.ts';
 import { frameStats, type FrameStats } from './stats.ts';
+import { takeHitches, type Hitch } from './hitches.ts';
 
 /** A fixed camera turning slowly around the spawn: the same view on every machine and every run. */
 export interface BenchOptions {
@@ -11,6 +12,8 @@ export interface BenchOptions {
   warmupMs?: number;
   /** Chunks in each direction that must be built before the measurement starts. */
   chunksReady?: number;
+  /** Run forward instead of standing still: exercises chunk and grass streaming while measuring. */
+  run?: boolean;
 }
 
 export interface BenchResult extends FrameStats {
@@ -22,6 +25,8 @@ export interface BenchResult extends FrameStats {
   height: number;
   pixelRatio: number;
   chunks: number;
+  /** Main-thread builds at or above 8 ms during the measured window. */
+  hitches: Hitch[];
   timestamp: string;
 }
 
@@ -49,6 +54,7 @@ export function createBench(options: BenchOptions = {}) {
   const name = options.name ?? 'spawn';
   const warmupMs = options.warmupMs ?? 2000;
   const chunksReady = options.chunksReady ?? 4;
+  const run = options.run ?? false;
 
   let scene: BenchScene | null = null;
   let phase: 'idle' | 'waiting' | 'warmup' | 'measuring' | 'done' = 'idle';
@@ -77,6 +83,7 @@ export function createBench(options: BenchOptions = {}) {
       height: window.innerHeight,
       pixelRatio: view.renderer.getPixelRatio(),
       chunks: scene!.chunks.loaded,
+      hitches: takeHitches(),
       timestamp: new Date().toISOString(),
       ...frameStats(times),
     };
@@ -99,6 +106,15 @@ export function createBench(options: BenchOptions = {}) {
   }
 
   return {
+    get running(): boolean {
+      return phase === 'warmup' || phase === 'measuring';
+    },
+
+    /** Direction the player runs in run mode; the camera stays behind it. */
+    get yaw(): number {
+      return ORBIT_START;
+    },
+
     attach(next: BenchScene): void {
       scene = next;
       phase = 'waiting';
@@ -118,7 +134,7 @@ export function createBench(options: BenchOptions = {}) {
       lastNow = now;
 
       // The camera takes this yaw on the next frame; one frame of lag does not matter for a benchmark.
-      scene.orbit.yaw = ORBIT_START + (now - readyAt) * ORBIT_SPEED;
+      scene.orbit.yaw = run ? ORBIT_START : ORBIT_START + (now - readyAt) * ORBIT_SPEED;
       scene.orbit.pitch = -0.16;
 
       if (phase === 'warmup' && now - readyAt >= warmupMs) {
@@ -126,6 +142,8 @@ export function createBench(options: BenchOptions = {}) {
         measureAt = now;
         lastNow = 0;
         times.length = 0;
+        // The warm-up covers the initial loads; measure only the moving window.
+        takeHitches();
       } else if (phase === 'measuring' && now - measureAt >= seconds * 1000) {
         finish();
       }

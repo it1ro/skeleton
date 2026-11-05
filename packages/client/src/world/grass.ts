@@ -10,6 +10,7 @@ import {
   Vector3,
 } from 'three/webgpu';
 import { hash3, mulberry32, type Terrain } from '@skeleton/shared';
+import { recordHitch } from '../bench/hitches.ts';
 
 /** Square grass tile in meters. The field covers a ring of tiles around the player and follows them. */
 const TILE = 16;
@@ -169,6 +170,7 @@ export class GrassField {
   }
 
   private buildTile(tx: number, tz: number): Tile {
+    const startedAt = performance.now();
     const ox = tx * TILE;
     const oz = tz * TILE;
     const group = new Group();
@@ -211,6 +213,7 @@ export class GrassField {
       : null;
     if (grassMesh) group.add(grassMesh);
     if (flowersMesh) group.add(flowersMesh);
+    recordHitch('grass', startedAt);
     return { group, grass: grassMesh, flowers: flowersMesh };
   }
 
