@@ -20,6 +20,8 @@ const GRASS_STEP = 0.5;
 const GRASS_KEEP = 0.55;
 const FLOWER_STEP = 1.6;
 const FLOWER_KEEP = 0.65;
+/** Milliseconds per frame spent building new tiles while the player moves. */
+const BUDGET_MS = 4;
 
 interface Tile {
   group: Group;
@@ -129,6 +131,8 @@ export class GrassField {
   private readonly grassMaterial = new MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
   private readonly flowerMaterial = new MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
   private readonly flowerPalette = [new Color(0xffe07a), new Color(0xf4f1e0), new Color(0x9aa8ff), new Color(0xe89cb4)];
+  private readonly wanted = new Set<string>();
+  private pending: [number, number][] = [];
   private center = { tx: Number.NaN, tz: Number.NaN };
 
   constructor(
@@ -140,33 +144,55 @@ export class GrassField {
     return this.tiles.size;
   }
 
-  update(x: number, z: number): void {
+  update(x: number, z: number, immediate = false): void {
     const tx = Math.floor(x / TILE);
     const tz = Math.floor(z / TILE);
-    if (tx === this.center.tx && tz === this.center.tz) return;
-    this.center = { tx, tz };
-
-    const wanted = new Set<string>();
-    for (let dz = -RADIUS; dz <= RADIUS; dz++) {
-      for (let dx = -RADIUS; dx <= RADIUS; dx++) {
-        if (dx * dx + dz * dz > (RADIUS + 0.5) ** 2) continue;
-        wanted.add(key(tx + dx, tz + dz));
+    if (tx !== this.center.tx || tz !== this.center.tz) {
+      this.center = { tx, tz };
+      this.wanted.clear();
+      for (let dz = -RADIUS; dz <= RADIUS; dz++) {
+        for (let dx = -RADIUS; dx <= RADIUS; dx++) {
+          if (dx * dx + dz * dz > (RADIUS + 0.5) ** 2) continue;
+          this.wanted.add(key(tx + dx, tz + dz));
+        }
+      }
+      for (const [k, tile] of this.tiles) {
+        if (this.wanted.has(k)) continue;
+        this.root.remove(tile.group);
+        tile.grass?.dispose();
+        tile.flowers?.dispose();
+        this.tiles.delete(k);
+      }
+      this.pending = this.pending.filter(([px, pz]) => this.wanted.has(key(px, pz)));
+      const queued = new Set(this.pending.map(([px, pz]) => key(px, pz)));
+      for (const k of this.wanted) {
+        if (this.tiles.has(k) || queued.has(k)) continue;
+        const [px, pz] = k.split(',').map(Number);
+        this.pending.push([px, pz]);
       }
     }
-    for (const [k, tile] of this.tiles) {
-      if (wanted.has(k)) continue;
-      this.root.remove(tile.group);
-      tile.grass?.dispose();
-      tile.flowers?.dispose();
-      this.tiles.delete(k);
+    this.drain(immediate);
+  }
+
+  /** Builds at most `BUDGET_MS` of new tiles per frame; the leading edge catches up over a few frames. */
+  private drain(immediate: boolean): void {
+    if (this.pending.length === 0) return;
+    if (immediate) {
+      while (this.pending.length > 0) this.addTile(this.pending.shift()!);
+      return;
     }
-    for (const k of wanted) {
-      if (this.tiles.has(k)) continue;
-      const [x0, z0] = k.split(',').map(Number);
-      const tile = this.buildTile(x0, z0);
-      this.tiles.set(k, tile);
-      this.root.add(tile.group);
-    }
+    const deadline = performance.now() + BUDGET_MS;
+    do {
+      this.addTile(this.pending.shift()!);
+    } while (this.pending.length > 0 && performance.now() < deadline);
+  }
+
+  private addTile([tx, tz]: [number, number]): void {
+    const k = key(tx, tz);
+    if (this.tiles.has(k)) return;
+    const tile = this.buildTile(tx, tz);
+    this.tiles.set(k, tile);
+    this.root.add(tile.group);
   }
 
   private buildTile(tx: number, tz: number): Tile {
@@ -184,8 +210,9 @@ export class GrassField {
         const x = ox + (i + rnd()) * GRASS_STEP;
         const z = oz + (j + rnd()) * GRASS_STEP;
         if (rnd() > GRASS_KEEP) continue;
-        if (this.terrain.biomeAt(x, z) !== 'meadows') continue;
-        grass.push(x - ox, this.terrain.heightAt(x, z), z - oz, rnd() * Math.PI * 2, 0.7 + rnd() * 1.0, rnd());
+        const h = this.terrain.heightAt(x, z);
+        if (this.terrain.biomeAt(x, z, h) !== 'meadows') continue;
+        grass.push(x - ox, h, z - oz, rnd() * Math.PI * 2, 0.7 + rnd() * 1.0, rnd());
       }
     }
 
@@ -198,8 +225,9 @@ export class GrassField {
         const z = oz + (j + flowerRnd()) * FLOWER_STEP;
         if (flowerRnd() > FLOWER_KEEP) continue;
         if (Math.sin(x * 0.11) + Math.cos(z * 0.09) < 0.2) continue;
-        if (this.terrain.biomeAt(x, z) !== 'meadows') continue;
-        flowers.push(x - ox, this.terrain.heightAt(x, z), z - oz, flowerRnd() * Math.PI * 2, 1 + flowerRnd() * 0.6, flowerRnd());
+        const h = this.terrain.heightAt(x, z);
+        if (this.terrain.biomeAt(x, z, h) !== 'meadows') continue;
+        flowers.push(x - ox, h, z - oz, flowerRnd() * Math.PI * 2, 1 + flowerRnd() * 0.6, flowerRnd());
       }
     }
 

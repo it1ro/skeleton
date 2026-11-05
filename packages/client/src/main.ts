@@ -111,7 +111,7 @@ async function start(name: string): Promise<void> {
   await Promise.all([avatarsLoaded, chunks.whenReady(START_CHUNKS)]);
   const me = new Avatar(name || 'Я', 0xd9a441);
   scene.add(chunks.root, remotes.root, me.root, grass.root);
-  grass.update(local.state.x, local.state.z);
+  grass.update(local.state.x, local.state.z, true);
   if (bench) bench.attach({ view, chunks, orbit, terrain, seed });
   const povituha = new PovituhaFigure(terrain, scene, 3.4, -4.6);
   const talk = new TalkPanel({
