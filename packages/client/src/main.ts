@@ -3,12 +3,14 @@ import { connectLocal, connectServer, type Connection } from './net/connection.t
 import { createView } from './render/renderer.ts';
 import { Environment } from './render/environment.ts';
 import { ChunkManager } from './world/chunks.ts';
+import { GrassField } from './world/grass.ts';
 import { Avatar, RemotePlayers, preloadAvatars } from './world/avatars.ts';
 import { Input } from './player/input.ts';
 import { OrbitCamera } from './player/camera.ts';
 import { LocalPlayer } from './player/local.ts';
 import { PovituhaFigure } from './npc/figure.ts';
 import { TalkPanel } from './npc/panel.ts';
+import { createBench } from './bench/bench.ts';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const menu = document.getElementById('menu')!;
@@ -23,6 +25,11 @@ const params = new URLSearchParams(location.search);
 const online = params.has('online');
 const seedParam = Number(params.get('seed') ?? Number.NaN);
 const localSeed = Number.isFinite(seedParam) ? seedParam : DEFAULT_SEED;
+
+// `?bench` starts the game without the menu and measures a fixed camera path. See `scripts/bench-aio.ts`.
+const benchParam = params.get('bench');
+const benchSeconds = benchParam && Number.isFinite(Number(benchParam)) ? Number(benchParam) : 10;
+const bench = benchParam === null ? null : createBench({ seconds: benchSeconds, name: params.get('benchName') ?? 'spawn' });
 try {
   nameInput.value = localStorage.getItem(NAME_KEY) ?? '';
 } catch {
@@ -43,10 +50,21 @@ let loaded = false;
 let dialogueOpen = false;
 
 function syncMenu(): void {
-  menu.classList.toggle('hidden', (input.locked || dialogueOpen) && loaded);
+  menu.classList.toggle('hidden', ((input.locked || dialogueOpen) && loaded) || bench !== null);
 }
 
 document.addEventListener('pointerlockchange', syncMenu);
+
+if (bench) {
+  menu.classList.add('hidden');
+  started = true;
+  status.textContent = 'Загрузка мира…';
+  start('Bench').catch((err: unknown) => {
+    started = false;
+    status.textContent = err instanceof Error ? err.message : String(err);
+    menu.classList.remove('hidden');
+  });
+}
 
 form.addEventListener('submit', (e) => {
   e.preventDefault();
@@ -73,16 +91,20 @@ async function start(name: string): Promise<void> {
   const terrain = createTerrain(seed);
   const view = await createView(canvas);
   const { renderer, scene, camera } = view;
+  if (params.get('pixels') === '0') view.togglePixels();
 
   const env = new Environment(scene);
   const chunks = new ChunkManager(seed);
+  const grass = new GrassField(terrain, seed);
   const remotes = new RemotePlayers(terrain);
   const local = new LocalPlayer(terrain, spawnState(terrain));
   const orbit = new OrbitCamera(camera, terrain);
   chunks.update(local.state.x, local.state.z);
   await Promise.all([avatarsLoaded, chunks.whenReady(START_CHUNKS)]);
   const me = new Avatar(name || 'Я', 0xd9a441);
-  scene.add(chunks.root, remotes.root, me.root);
+  scene.add(chunks.root, remotes.root, me.root, grass.root);
+  grass.update(local.state.x, local.state.z);
+  if (bench) bench.attach({ view, chunks, orbit, terrain, seed });
   const povituha = new PovituhaFigure(terrain, scene, 3.4, -4.6);
   const talk = new TalkPanel({
     llm: params.get('npc') === 'llm',
@@ -160,7 +182,9 @@ async function start(name: string): Promise<void> {
     }
 
     orbit.update(input, pos.x, pos.y, pos.z);
+    bench?.update(now, dt);
     chunks.update(pos.x, pos.z);
+    grass.update(pos.x, pos.z);
     env.update(serverTick, pos.x, pos.y, pos.z);
     remotes.update(serverTick, dt, camera, window.innerWidth, window.innerHeight);
     me.updateLabel(camera, window.innerWidth, window.innerHeight);
