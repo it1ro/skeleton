@@ -41,6 +41,13 @@ const bench =
         run: benchRun,
         scene: benchSceneParam === 'water' || benchSceneParam === 'sky' ? benchSceneParam : 'spawn',
       });
+
+declare global {
+  interface Window {
+    /** Console handle for the gray→color hook: `__vision(0)` grays the world, `__vision(1)` restores it. */
+    __vision?: (vision: number) => number;
+  }
+}
 try {
   nameInput.value = localStorage.getItem(NAME_KEY) ?? '';
 } catch {
@@ -105,6 +112,13 @@ async function start(name: string): Promise<void> {
   if (params.get('pixels') === '0') view.togglePixels();
 
   const env = new Environment(scene);
+  // `?vision=0` opens the game in the gray start; `__vision(1)` in the console brings the color back.
+  const visionParam = Number(params.get('vision'));
+  if (params.has('vision') && Number.isFinite(visionParam)) env.visionState = visionParam;
+  window.__vision = (vision: number) => {
+    env.visionState = vision;
+    return env.visionState;
+  };
   const chunks = new ChunkManager(seed);
   const grass = new GrassField(terrain, seed);
   const remotes = new RemotePlayers(terrain);
