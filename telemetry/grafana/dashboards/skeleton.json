@@ -1,115 +1,554 @@
 {
   "uid": "skeleton-telemetry",
   "title": "Skeleton telemetry",
-  "tags": ["skeleton", "game"],
+  "tags": [
+    "skeleton",
+    "game",
+    "health"
+  ],
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
-  "refresh": "5s",
-  "time": { "from": "now-15m", "to": "now" },
+  "refresh": "10s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
   "templating": {
-    "list": [
-      {
-        "name": "session",
-        "label": "Session",
-        "type": "query",
-        "datasource": { "type": "postgres", "uid": "skeleton-db" },
-        "definition": "SELECT id::text AS __text, id::text AS __value FROM sessions ORDER BY started_at DESC LIMIT 20",
-        "query": "SELECT id::text AS __text, id::text AS __value FROM sessions ORDER BY started_at DESC LIMIT 20",
-        "refresh": 1,
-        "includeAll": false,
-        "multi": false,
-        "sort": 0
-      }
-    ]
+    "list": []
   },
   "panels": [
     {
+      "id": 100,
+      "type": "row",
+      "title": "Game health",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
       "id": 1,
-      "type": "timeseries",
-      "title": "Frame time, ms",
-      "datasource": { "type": "postgres", "uid": "skeleton-db" },
-      "gridPos": { "x": 0, "y": 0, "w": 16, "h": 9 },
+      "type": "stat",
+      "title": "Sessions in range",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
       "targets": [
         {
           "refId": "A",
-          "format": "time_series",
-          "rawSql": "SELECT ts AS time, fps, p95, max FROM samples WHERE session_id = '$session'::uuid ORDER BY ts"
+          "format": "table",
+          "rawSql": "SELECT count(*) AS sessions FROM sessions WHERE $__timeFilter(started_at)",
+          "instant": true
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "short", "custom": { "lineWidth": 1, "fillOpacity": 8 } },
+        "defaults": {
+          "unit": "short"
+        },
         "overrides": []
       },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom" } }
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
     },
     {
       "id": 2,
-      "type": "timeseries",
-      "title": "Chunks and grass",
-      "datasource": { "type": "postgres", "uid": "skeleton-db" },
-      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 9 },
+      "type": "stat",
+      "title": "Errors in range",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
       "targets": [
         {
           "refId": "A",
-          "format": "time_series",
-          "rawSql": "SELECT ts AS time, chunks, grass_tiles, grass_pending, chunk_queue FROM samples WHERE session_id = '$session'::uuid ORDER BY ts"
+          "format": "table",
+          "rawSql": "SELECT count(*) AS errors FROM events WHERE $__timeFilter(ts) AND kind IN ('error','contextlost')",
+          "instant": true
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "short", "custom": { "lineWidth": 1, "fillOpacity": 0 } },
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
         "overrides": []
       },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom" } }
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
     },
     {
       "id": 3,
-      "type": "table",
-      "title": "Hitches",
-      "datasource": { "type": "postgres", "uid": "skeleton-db" },
-      "gridPos": { "x": 0, "y": 9, "w": 12, "h": 9 },
+      "type": "stat",
+      "title": "Sessions with errors",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
       "targets": [
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT ts AS time, kind, round(ms::numeric, 1) AS ms, data FROM events WHERE session_id = '$session'::uuid AND kind = 'hitch' ORDER BY ts DESC LIMIT 200"
+          "rawSql": "SELECT count(DISTINCT session_id) AS sessions FROM events WHERE $__timeFilter(ts) AND kind IN ('error','contextlost')",
+          "instant": true
         }
       ],
-      "options": { "showHeader": true }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
     },
     {
       "id": 4,
+      "type": "stat",
+      "title": "Last sample age",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT COALESCE(EXTRACT(EPOCH FROM (now() - max(ts)))::int, 0) AS age FROM samples",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 30
+              },
+              {
+                "color": "red",
+                "value": 120
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 5,
       "type": "timeseries",
-      "title": "Host: GPU and CPU",
-      "datasource": { "type": "postgres", "uid": "skeleton-db" },
-      "gridPos": { "x": 12, "y": 9, "w": 12, "h": 9 },
+      "title": "Sessions per hour",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 1,
+        "w": 8,
+        "h": 4
+      },
       "targets": [
         {
           "refId": "A",
           "format": "time_series",
-          "rawSql": "SELECT ts AS time, gpu_util, gpu_mem_mb, cpu_load FROM host_samples WHERE $__timeFilter(ts) ORDER BY ts"
+          "rawSql": "SELECT time_bucket('1 hour', started_at) AS time, count(*) AS sessions FROM sessions WHERE $__timeFilter(started_at) GROUP BY 1 ORDER BY 1"
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "short", "custom": { "lineWidth": 1, "fillOpacity": 0 } },
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 6
+          }
+        },
         "overrides": []
       },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom" } }
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean"
+          ]
+        }
+      }
     },
     {
-      "id": 5,
+      "id": 6,
       "type": "table",
-      "title": "Sessions",
-      "datasource": { "type": "postgres", "uid": "skeleton-db" },
-      "gridPos": { "x": 0, "y": 18, "w": 24, "h": 8 },
+      "title": "Recent sessions",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 6
+      },
       "targets": [
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT kind, started_at, ended_at, seed, commit, samples, fps, p95, max, hitches FROM session_summary ORDER BY started_at DESC LIMIT 50"
+          "rawSql": "SELECT s.game, s.started_at, s.commit, s.backend,\n                    round(s.load_ms::numeric, 0) AS load_ms,\n                    round(s.first_frame_ms::numeric, 0) AS first_frame_ms,\n                    s.samples, s.fps, s.p95, s.max, s.hitches,\n                    COALESCE(e.errors, 0) AS errors\n             FROM session_summary s\n             LEFT JOIN (SELECT session_id, count(*) AS errors FROM events\n                        WHERE kind IN ('error','contextlost') GROUP BY session_id) e\n               ON e.session_id = s.id\n             WHERE $__timeFilter(s.started_at)\n             ORDER BY s.started_at DESC LIMIT 50"
         }
       ],
-      "options": { "showHeader": true }
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 111,
+      "type": "row",
+      "title": "Errors",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 11,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Errors by fingerprint",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 14,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT COALESCE(data->>'fingerprint', 'contextlost') AS fingerprint,\n                    kind,\n                    left(COALESCE(data->>'message', 'WebGL context lost'), 100) AS message,\n                    count(*) AS count,\n                    count(DISTINCT session_id) AS sessions,\n                    min(ts) AS first_seen,\n                    max(ts) AS last_seen\n             FROM events\n             WHERE $__timeFilter(ts) AND kind IN ('error','contextlost')\n             GROUP BY 1, 2, 3 ORDER BY count DESC LIMIT 50"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Errors per 5 minutes",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 12,
+        "w": 10,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT time_bucket('5 minutes', ts) AS time, kind, count(*) AS n\n                  FROM events WHERE $__timeFilter(ts) AND kind IN ('error','contextlost')\n                  GROUP BY 1, 2 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 6
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean"
+          ]
+        }
+      }
+    },
+    {
+      "id": 121,
+      "type": "row",
+      "title": "Telemetry health",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Samples per minute",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT time_bucket('1 minute', ts) AS time, count(*) AS samples, count(DISTINCT session_id) AS sessions\n                  FROM samples WHERE $__timeFilter(ts) GROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 6
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean"
+          ]
+        }
+      }
+    },
+    {
+      "id": 16,
+      "type": "stat",
+      "title": "Samples in range",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 22,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT count(*) AS samples FROM samples WHERE $__timeFilter(ts)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "Sessions without samples",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 22,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT count(*) AS sessions FROM sessions s\n            WHERE $__timeFilter(s.started_at)\n              AND NOT EXISTS (SELECT 1 FROM samples x WHERE x.session_id = s.id)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    }
+  ],
+  "links": [
+    {
+      "title": "Session timeline",
+      "url": "/d/skeleton-session",
+      "type": "link",
+      "icon": "external link",
+      "targetBlank": false
     }
   ]
 }

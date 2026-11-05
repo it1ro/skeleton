@@ -6,6 +6,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 CREATE TABLE IF NOT EXISTS sessions (
   id uuid PRIMARY KEY,
   kind text NOT NULL DEFAULT 'play',
+  game text NOT NULL DEFAULT 'skeleton',
   started_at timestamptz NOT NULL DEFAULT now(),
   ended_at timestamptz,
   seed integer,
@@ -15,8 +16,11 @@ CREATE TABLE IF NOT EXISTS sessions (
   width integer,
   height integer,
   pixel_ratio real,
+  load_ms real,
+  first_frame_ms real,
   user_agent text
 );
+CREATE INDEX IF NOT EXISTS sessions_game_started ON sessions (game, started_at DESC);
 
 CREATE TABLE IF NOT EXISTS samples (
   session_id uuid NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -104,12 +108,15 @@ SELECT add_retention_policy('host_samples', INTERVAL '30 days');
 CREATE OR REPLACE VIEW session_summary AS
 SELECT s.id,
        s.kind,
+       s.game,
        s.started_at,
        s.ended_at,
        s.seed,
        s.commit,
        s.backend,
        s.gpu,
+       s.load_ms,
+       s.first_frame_ms,
        count(x.ts) AS samples,
        round(avg(x.fps)::numeric, 1) AS fps,
        round(avg(x.p95)::numeric, 1) AS p95,

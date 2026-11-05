@@ -17,17 +17,29 @@ HUD и бенч показывают момент, но не историю. Т�
 
 ## Что пишем
 
-- `sessions` — seed, commit, backend, GPU, viewport.
+- `sessions` — `game`, seed, commit, backend, GPU, viewport, `load_ms`, `first_frame_ms`.
 - `samples` — раз в секунду: fps, p50/p95/p99/max, рывки, чанки, тайлы травы и очереди, draw calls,
   треугольники, heap, позиция, биом, скорость.
-- `events` — рывки >8 мс с контекстом, ошибки JS, потеря WebGL-контекста, long tasks.
+- `events` — рывки >8 мс с контекстом, ошибки JS с `fingerprint`, потеря WebGL-контекста, long tasks.
 - `host_samples` — GPU (`nvidia-smi`), CPU и RAM раз в секунду.
 - `bench_runs` — история статических и движущихся бенчей.
 
 ## Дашборды
 
-Grafana `http://127.0.0.1:3000` (с ноутбука — через `ssh -L 3000:localhost:3000 aio`):
-сессии, кадр, чанки/трава, рывки, GPU/CPU.
+Grafana `http://aio:3000` (Tailscale или LAN; на aio — `http://127.0.0.1:3000`). Два дашборда, ссылки друг на друга в шапке:
+
+**Skeleton telemetry** — здоровье за 24 часа:
+
+- **Game health** — сессии, ошибки, сессии с ошибками, возраст последнего сэмпла, сессии по часам, последние сессии.
+- **Errors** — ошибки по фингерпринтам (число, сессии, первое/последнее появление) и график по 5 минут.
+- **Telemetry health** — сэмплы по минутам, всего сэмплов, сессии без сэмплов.
+
+**Skeleton session** — выбранная сессия, окно 15 минут:
+
+- **Startup** — `load_ms`, `first_frame_ms`, первые 12 секунд кадра и стриминга таблицей.
+- **Performance** — кадр, чанки/трава, рывки, GPU/CPU.
+- **Renderer** — draw calls, треугольники, heap, устройство (backend, GPU, разрешение, DPR).
+- **Errors in this session** — ошибки и потеря контекста этой сессии.
 
 ## Приватность
 

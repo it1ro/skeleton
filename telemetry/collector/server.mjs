@@ -83,11 +83,14 @@ async function serveStatic(req, res, url) {
 }
 
 const SESSION_SQL = `
-INSERT INTO sessions (id, kind, started_at, ended_at, seed, commit, backend, gpu, width, height, pixel_ratio, user_agent)
-VALUES ($1, $2, COALESCE($3::timestamptz, now()), $4, $5, $6, $7, $8, $9, $10, $11, $12)
+INSERT INTO sessions (id, kind, game, started_at, ended_at, seed, commit, backend, gpu, width, height,
+                      pixel_ratio, load_ms, first_frame_ms, user_agent)
+VALUES ($1, $2, $3, COALESCE($4::timestamptz, now()), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 ON CONFLICT (id) DO UPDATE SET
   ended_at = COALESCE(EXCLUDED.ended_at, sessions.ended_at),
-  commit = COALESCE(EXCLUDED.commit, sessions.commit)`;
+  commit = COALESCE(EXCLUDED.commit, sessions.commit),
+  load_ms = COALESCE(EXCLUDED.load_ms, sessions.load_ms),
+  first_frame_ms = COALESCE(EXCLUDED.first_frame_ms, sessions.first_frame_ms)`;
 
 const SAMPLE_SQL = `
 INSERT INTO samples (session_id, ts, fps, p50, p95, p99, max, frames, hitches, chunks, grass_tiles,
@@ -110,6 +113,7 @@ async function ingest(payload) {
   await pool.query(SESSION_SQL, [
     String(session.id),
     String(session.kind ?? 'play'),
+    String(session.game ?? 'skeleton'),
     session.startedAt ?? null,
     session.endedAt ?? null,
     number(session.seed),
@@ -119,6 +123,8 @@ async function ingest(payload) {
     number(session.width),
     number(session.height),
     number(session.pixelRatio),
+    number(session.loadMs),
+    number(session.firstFrameMs),
     session.userAgent ?? null,
   ]);
 
@@ -209,7 +215,8 @@ async function handle(req, res) {
 
   if (req.method === 'GET' && url.pathname === '/api/sessions') {
     const rows = await pool.query(
-      `SELECT id, kind, started_at, ended_at, seed, commit, backend, gpu, samples, fps, p95, max, hitches
+      `SELECT id, kind, game, started_at, ended_at, seed, commit, backend, gpu, load_ms, first_frame_ms,
+              samples, fps, p95, max, hitches
        FROM session_summary ORDER BY started_at DESC LIMIT 50`,
     );
     json(res, 200, rows.rows);

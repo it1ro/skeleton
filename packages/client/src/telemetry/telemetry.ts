@@ -1,4 +1,5 @@
 import { takeHitches } from '../bench/hitches.ts';
+import { fingerprint } from './fingerprint.ts';
 
 declare const __COMMIT__: string;
 
@@ -74,9 +75,11 @@ function heapMb(): number | null {
 export function startTelemetry(options: TelemetryOptions) {
   if (!new URLSearchParams(location.search).has('telemetry')) return null;
 
+  const loadMs = Math.round(performance.now() * 10) / 10;
   const session = {
     id: crypto.randomUUID(),
     kind: 'play',
+    game: 'skeleton',
     seed: options.seed,
     commit: typeof __COMMIT__ === 'string' && __COMMIT__ ? __COMMIT__ : null,
     backend: options.backend,
@@ -84,6 +87,8 @@ export function startTelemetry(options: TelemetryOptions) {
     width: window.innerWidth,
     height: window.innerHeight,
     pixelRatio: options.pixelRatio,
+    loadMs,
+    firstFrameMs: null as number | null,
     userAgent: navigator.userAgent,
     startedAt: new Date().toISOString(),
   };
@@ -158,6 +163,7 @@ export function startTelemetry(options: TelemetryOptions) {
   }
 
   function frame(now: number, _dt: number): void {
+    if (session.firstFrameMs === null) session.firstFrameMs = Math.round(now * 10) / 10;
     if (last > 0) times.push(now - last);
     last = now;
     if (now - sampleStart >= SAMPLE_MS) {
@@ -172,12 +178,37 @@ export function startTelemetry(options: TelemetryOptions) {
   }
 
   window.addEventListener('error', (event) => {
-    addEvent('error', 0, { message: event.message, source: event.filename, line: event.lineno });
+    const error = event.error instanceof Error ? event.error : null;
+    const message = event.message || error?.message || 'error';
+    const source = event.filename ?? null;
+    const line = Number.isFinite(event.lineno) ? event.lineno : null;
+    addEvent('error', 0, {
+      kind: 'js',
+      message,
+      source,
+      line,
+      col: Number.isFinite(event.colno) ? event.colno : null,
+      stack: error?.stack ? error.stack.split('\n').slice(0, 8).join('\n') : null,
+      fingerprint: fingerprint(message, source, line),
+    });
+    flush();
   });
   window.addEventListener('unhandledrejection', (event) => {
-    addEvent('error', 0, { message: String(event.reason) });
+    const reason = event.reason;
+    const message = reason instanceof Error ? reason.message : String(reason);
+    const stack = reason instanceof Error ? reason.stack ?? null : null;
+    addEvent('error', 0, {
+      kind: 'promise',
+      message,
+      stack: stack ? stack.split('\n').slice(0, 8).join('\n') : null,
+      fingerprint: fingerprint(message, null, null),
+    });
+    flush();
   });
-  document.getElementById('view')?.addEventListener('webglcontextlost', () => addEvent('contextlost', 0, {}));
+  document.getElementById('view')?.addEventListener('webglcontextlost', () => {
+    addEvent('contextlost', 0, { kind: 'contextlost', backend: session.backend, gpu: session.gpu });
+    flush();
+  });
   try {
     new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {

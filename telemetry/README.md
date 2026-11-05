@@ -9,7 +9,11 @@
 docker compose up -d --build
 ```
 
-Grafana — `http://aio:3000` (Tailscale или LAN; admin / `skeleton`), дашборд «Skeleton telemetry».
+Grafana — `http://aio:3000` (Tailscale или LAN; admin / `skeleton`), два дашборда:
+
+- **Skeleton telemetry** — здоровье игры за 24 часа: сессии, ошибки по фингерпринтам, доставка телеметрии.
+- **Skeleton session** — одна сессия: старт, кадр, чанки/трава, рывки, хост, рендер, её ошибки.
+
 На самом aio — `http://127.0.0.1:3000`.
 
 Игра с телеметрией — `http://127.0.0.1:18010/?seed=42&telemetry`. Сборщик отдаёт статику игры и принимает
@@ -28,14 +32,27 @@ Grafana — `http://aio:3000` (Tailscale или LAN; admin / `skeleton`), даш
 
 ## Таблицы
 
-- `sessions` — сессия, seed, commit, backend, GPU, viewport.
+- `sessions` — сессия, `game`, seed, commit, backend, GPU, viewport, `load_ms` и `first_frame_ms`.
 - `samples` — 1 Гц срезы; hypertable.
-- `events` — рывки, ошибки, long tasks, контекст; hypertable.
+- `events` — рывки, ошибки с `fingerprint`, long tasks, контекст; hypertable.
 - `host_samples` — GPU/CPU/RAM раз в секунду; hypertable.
 - `bench_runs` — история бенчей.
 - `session_summary` — сводка по сессии для таблицы.
 
 Сырые срезы живут 90 дней, хост — 30. `samples_1m` — минутные агрегаты.
+
+## Обновление схемы
+
+`schema.sql` применяется только на пустом volume. На живой базе новые поля добавляет миграция:
+
+```bash
+# на aio, из каталога telemetry
+docker compose exec -T db psql -U skeleton -d skeleton < migrations/001-dashboard-fields.sql
+```
+
+После правки JSON дашборда Grafana перечитывает `grafana/dashboards` сама (раз в 10 секунд).
+После правки клиента хватает `npm run build`: сборщик отдаёт `packages/client/dist` с хоста. После правки
+`collector/server.mjs` — `docker compose up -d --build collector`.
 
 ## Запросы
 
@@ -45,6 +62,13 @@ SELECT * FROM session_summary WHERE started_at > now() - interval '1 day' ORDER 
 
 -- худшие рывки
 SELECT ts, kind, ms, data FROM events WHERE kind = 'hitch' ORDER BY ms DESC LIMIT 20;
+
+-- ошибки по фингерпринтам
+SELECT data->>'fingerprint' AS fingerprint, data->>'message' AS message, count(*)
+FROM events WHERE kind = 'error' GROUP BY 1, 2 ORDER BY count DESC;
+
+-- старт последней сессии
+SELECT started_at, load_ms, first_frame_ms FROM sessions ORDER BY started_at DESC LIMIT 5;
 
 -- fps и GPU по минутам
 SELECT time_bucket('1 minute', s.ts) AS minute, avg(s.fps) AS fps, avg(h.gpu_util) AS gpu
