@@ -26,6 +26,8 @@ export interface BenchFrame {
   renderMs: number;
   calls: number;
   triangles: number;
+  /** Tree instances drawn into the shadow map: the near trees only, not every loaded tree. */
+  casters: number;
 }
 
 export interface BenchResult extends FrameStats {
@@ -48,6 +50,8 @@ export interface BenchResult extends FrameStats {
   /** Draw calls and triangles of the last measured frame. */
   calls: number;
   triangles: number;
+  /** Tree instances the shadow pass drew in the last measured frame. */
+  casters: number;
   /** Main-thread builds at or above 8 ms during the measured window. */
   hitches: Hitch[];
   timestamp: string;
@@ -94,6 +98,7 @@ export function createBench(options: BenchOptions = {}) {
   let lastNow = 0;
   let calls = 0;
   let triangles = 0;
+  let casters = 0;
   let ocean: { x: number; z: number } | null = null;
   const times: number[] = [];
   const cpuTimes: number[] = [];
@@ -129,6 +134,7 @@ export function createBench(options: BenchOptions = {}) {
       renderP95: render.p95,
       calls,
       triangles,
+      casters,
       hitches: takeHitches(),
       timestamp: new Date().toISOString(),
       ...frameStats(times),
@@ -140,7 +146,7 @@ export function createBench(options: BenchOptions = {}) {
       `${result.fps.toFixed(1)} fps · p50 ${result.p50.toFixed(1)} ms · p95 ${result.p95.toFixed(1)} ms`,
       `cpu p95 ${result.cpuP95.toFixed(1)} ms · render p95 ${result.renderP95.toFixed(1)} ms`,
       `${result.frames} frames · ${result.width}×${result.height} @${result.pixelRatio} · ${result.chunks} chunks`,
-      `calls ${result.calls} · triangles ${result.triangles} · ${scene}${run ? ' (run)' : ''}`,
+      `calls ${result.calls} · triangles ${result.triangles} · casters ${result.casters} · ${scene}${run ? ' (run)' : ''}`,
     ].join('\n');
     const old = document.getElementById('bench-result');
     if (old) old.textContent = line;
@@ -210,6 +216,7 @@ export function createBench(options: BenchOptions = {}) {
         cpuTimes.push(Math.max(0, total - frame.renderMs));
         calls = frame.calls;
         triangles = frame.triangles;
+        casters = frame.casters;
       }
       lastNow = now;
 
