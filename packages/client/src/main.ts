@@ -30,6 +30,7 @@ const localSeed = Number.isFinite(seedParam) ? seedParam : DEFAULT_SEED;
 // `?bench` starts the game without the menu and measures a fixed camera path. See `scripts/bench-aio.ts`.
 const benchParam = params.get('bench');
 const benchRun = params.has('benchRun');
+const benchSceneParam = params.get('benchScene');
 const benchSeconds = benchParam && Number.isFinite(Number(benchParam)) ? Number(benchParam) : 10;
 const bench =
   benchParam === null
@@ -38,6 +39,7 @@ const bench =
         seconds: benchSeconds,
         name: params.get('benchName') ?? (benchRun ? 'run' : 'spawn'),
         run: benchRun,
+        scene: benchSceneParam === 'water' || benchSceneParam === 'sky' ? benchSceneParam : 'spawn',
       });
 try {
   nameInput.value = localStorage.getItem(NAME_KEY) ?? '';
@@ -164,7 +166,7 @@ async function start(name: string): Promise<void> {
     const serverTick = snapTick + ((now - snapTime) / 1000) * TICK_RATE;
 
     if (input.consume('KeyP')) view.togglePixels();
-    const autoRun = bench?.running ?? false;
+    const autoRun = bench?.autoRun ?? false;
     const moveYaw = autoRun ? (bench?.yaw ?? orbit.yaw) : orbit.yaw;
     accumulator += dt;
     while (accumulator >= TICK_DT) {
@@ -194,7 +196,7 @@ async function start(name: string): Promise<void> {
     }
 
     orbit.update(input, pos.x, pos.y, pos.z);
-    bench?.update(now, dt);
+    bench?.placeCamera(pos);
     chunks.update(pos.x, pos.z);
     grass.update(pos.x, pos.z);
     env.update(serverTick, pos.x, pos.y, pos.z);
@@ -202,7 +204,10 @@ async function start(name: string): Promise<void> {
     me.updateLabel(camera, window.innerWidth, window.innerHeight);
     povituha.updateLabel(camera, window.innerWidth, window.innerHeight);
 
+    const renderStart = performance.now();
     renderer.render(scene, camera);
+    const renderMs = performance.now() - renderStart;
+    bench?.update(now, dt, { renderMs, calls: renderer.info.render.calls, triangles: renderer.info.render.triangles });
     input.endFrame();
 
     if (telemetry) {
