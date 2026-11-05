@@ -9,9 +9,12 @@
   ],
   "scripts": {
     "dev": "npm run dev -w @skeleton/client",
+    "dev:npc": "concurrently -k -n npc,client -c magenta,cyan \"npm run npc:proxy\" \"npm run dev\"",
     "dev:online": "concurrently -k -n server,client -c yellow,cyan \"npm run dev -w @skeleton/server\" \"npm run dev -w @skeleton/client\"",
     "build": "npm run typecheck && npm run build -w @skeleton/client",
     "server": "npm run start -w @skeleton/server",
+    "npc:proxy": "tsx scripts/npc-proxy.ts",
+    "npc:bench": "tsx scripts/npc-bench.ts",
     "typecheck": "tsc --noEmit",
     "assets": "tsx scripts/build-assets.ts",
     "test": "vitest run",

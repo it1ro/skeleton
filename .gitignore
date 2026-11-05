@@ -7,3 +7,9 @@ dist/
 assets-src/quaternius/
 # The Meshy hero source with 4K textures (~25 MB); the built player.glb is committed.
 assets-src/meshy/
+# Local screenshots and one-off browser scripts used to check the build.
+.tmp/
+# The NPC proxy's model key and endpoint: local only, never committed.
+.env.npc
+# Synthesized NPC voice clips: a cache, rebuilt on demand.
+.cache/
