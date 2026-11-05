@@ -1,14 +1,19 @@
 import {
   BufferAttribute,
   BufferGeometry,
+  CanvasTexture,
   ConeGeometry,
   CylinderGeometry,
   Group,
   InstancedMesh,
+  LinearFilter,
+  LinearMipmapLinearFilter,
   Matrix4,
   Mesh,
   MeshStandardMaterial,
   Quaternion,
+  RepeatWrapping,
+  SRGBColorSpace,
   Vector3,
 } from 'three/webgpu';
 import { CHUNK_SEGMENTS, CHUNK_SIZE } from '@skeleton/shared';
@@ -44,6 +49,51 @@ function gridIndex(): Uint16Array {
   return idx;
 }
 
+/**
+ * A small tiling texture for the ground: near-white with thin grass strokes and mottling.
+ * Vertex colors carry the biome, so the texture only adds tooth and breaks up flat color.
+ */
+function groundTexture(): CanvasTexture {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const context = canvas.getContext('2d')!;
+  context.fillStyle = '#f2f0e2';
+  context.fillRect(0, 0, size, size);
+
+  let state = 0x9e3779b9;
+  const random = () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+  for (let i = 0; i < 1400; i++) {
+    const x = random() * size;
+    const y = random() * size;
+    const length = 1 + random() * 6;
+    const lean = (random() - 0.5) * 2.5;
+    context.strokeStyle = random() > 0.5 ? 'rgba(72, 94, 42, 0.1)' : 'rgba(255, 252, 220, 0.1)';
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(x, y);
+    context.lineTo(x + lean, y - length);
+    context.stroke();
+  }
+  for (let i = 0; i < 90; i++) {
+    context.fillStyle = random() > 0.5 ? 'rgba(60, 80, 36, 0.05)' : 'rgba(255, 255, 220, 0.05)';
+    context.beginPath();
+    context.ellipse(random() * size, random() * size, 3 + random() * 9, 2 + random() * 6, random() * Math.PI, 0, Math.PI * 2);
+    context.fill();
+  }
+
+  const texture = new CanvasTexture(canvas);
+  texture.wrapS = texture.wrapT = RepeatWrapping;
+  texture.colorSpace = SRGBColorSpace;
+  texture.magFilter = LinearFilter;
+  texture.minFilter = LinearMipmapLinearFilter;
+  texture.anisotropy = 4;
+  return texture;
+}
+
 /** Streams terrain chunks around the player. Geometry is built in Web Workers. */
 export class ChunkManager {
   readonly root = new Group();
@@ -52,7 +102,12 @@ export class ChunkManager {
   private readonly busy: number[] = [];
   /** One index array for all chunks; each chunk wraps it in its own attribute, so disposing a chunk frees only its buffers. */
   private readonly index = gridIndex();
-  private readonly groundMaterial = new MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+  private readonly groundMaterial = new MeshStandardMaterial({
+    vertexColors: true,
+    map: groundTexture(),
+    roughness: 1,
+    metalness: 0,
+  });
   private readonly trunkGeometry = new CylinderGeometry(0.22, 0.35, 3, 6).translate(0, 1.5, 0);
   private readonly crownGeometry = new ConeGeometry(1.9, 6, 7).translate(0, 5.5, 0);
   private readonly trunkMaterial = new MeshStandardMaterial({ color: 0x5a3d26, roughness: 1 });
@@ -152,6 +207,7 @@ export class ChunkManager {
     geometry.setAttribute('position', new BufferAttribute(data.positions, 3));
     geometry.setAttribute('normal', new BufferAttribute(data.normals, 3));
     geometry.setAttribute('color', new BufferAttribute(data.colors, 3));
+    geometry.setAttribute('uv', new BufferAttribute(data.uvs, 2));
     geometry.computeBoundingSphere();
     const ground = new Mesh(geometry, this.groundMaterial);
     ground.receiveShadow = true;
