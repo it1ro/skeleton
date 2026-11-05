@@ -1,6 +1,6 @@
 import { SNAPSHOT_EVERY, TICK_DT, TICK_RATE } from './constants.ts';
 import { spawnState, stepPlayer, type PlayerInput, type PlayerState } from './movement.ts';
-import type { ClientMessage, PlayerSnapshot, ServerMessage } from './protocol.ts';
+import type { ClientMessage, PlayerSnapshot, ServerMessage, Skeleton } from './protocol.ts';
 import { createTerrain } from './terrain.ts';
 
 /** Inputs applied per player per tick. Above 1 absorbs network jitter, the cap blocks speed hacks. */
@@ -33,6 +33,7 @@ interface Player {
   send: (msg: ServerMessage) => void;
   name: string;
   color: number;
+  skeleton: Skeleton;
   state: PlayerState;
   inputs: PlayerInput[];
   ack: number;
@@ -57,6 +58,7 @@ export function createSim(seed: number, log: (line: string) => void = () => {}):
       send,
       name: `Viking ${id}`,
       color: Math.floor(Math.random() * 0xffffff),
+      skeleton: 'm',
       state: spawnState(terrain),
       inputs: [],
       ack: 0,
@@ -72,6 +74,8 @@ export function createSim(seed: number, log: (line: string) => void = () => {}):
             if (player.joined) return;
             player.joined = true;
             if (typeof msg.name === 'string' && msg.name.trim()) player.name = msg.name.trim().slice(0, MAX_NAME);
+            // The wire can carry anything: only the two known figures, anything else is the male.
+            player.skeleton = msg.skeleton === 'f' ? 'f' : 'm';
             send({ t: 'welcome', id, seed, tick });
             log(`+ ${player.name} (#${id}), online: ${players.size}`);
             break;
@@ -110,7 +114,7 @@ export function createSim(seed: number, log: (line: string) => void = () => {}):
     for (const p of players.values()) {
       if (!p.joined) continue;
       const { x, y, z, yaw } = p.state;
-      snapshot.push({ id: p.id, name: p.name, color: p.color, x, y, z, yaw, speed: p.speed });
+      snapshot.push({ id: p.id, name: p.name, color: p.color, skeleton: p.skeleton, x, y, z, yaw, speed: p.speed });
     }
     for (const p of players.values()) {
       if (!p.joined) continue;

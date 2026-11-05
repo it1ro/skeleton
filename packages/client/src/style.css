@@ -73,6 +73,20 @@ body {
   border-color: #b07a40;
   cursor: pointer;
 }
+#figure {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+#join #figure button {
+  background: #1c1914;
+  border-color: #5c5142;
+  font-size: 14px;
+}
+#join #figure button.selected {
+  background: #8a5a2b;
+  border-color: #b07a40;
+}
 #join .help {
   opacity: 0.7;
   font-size: 12px;

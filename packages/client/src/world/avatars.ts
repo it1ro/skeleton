@@ -1,5 +1,5 @@
 import { BoxGeometry, CapsuleGeometry, Group, Mesh, MeshStandardMaterial, Vector3, type PerspectiveCamera } from 'three/webgpu';
-import { SNAPSHOT_EVERY, moveMode, type MoveMode, type PlayerSnapshot, type Terrain } from '@skeleton/shared';
+import { SNAPSHOT_EVERY, moveMode, type MoveMode, type PlayerSnapshot, type Skeleton, type Terrain } from '@skeleton/shared';
 import { loadAnimations, loadModel, preload } from '../assets/models.ts';
 import { Animator } from './animator.ts';
 
@@ -9,17 +9,31 @@ const INTERP_DELAY_TICKS = SNAPSHOT_EVERY * 2;
 const body = new CapsuleGeometry(0.35, 1.1, 4, 8).translate(0, 0.9, 0);
 const nose = new BoxGeometry(0.2, 0.15, 0.3).translate(0, 1.45, -0.35);
 
-const MODEL = 'player';
-const ANIMATIONS = 'anims_humanoid';
+/**
+ * Model and clips of each figure (docs/assets.md). The clips carry the character's own pelvis height, so a
+ * figure never borrows the other's clips: the male is 1.80 m, the female 1.70 m.
+ */
+const FIGURES: Record<Skeleton, { model: string; animations: string }> = {
+  m: { model: 'player_m', animations: 'anims_humanoid_m' },
+  f: { model: 'player_f', animations: 'anims_humanoid_f' },
+};
 
-/** Starts loading the character files. Resolves when they are in memory, or failed: avatars then fall back to a capsule. */
+/**
+ * Dev switch: `?model=player_rig_m` (or `player_rig_f`) draws a character that Meshy rigged and animated itself,
+ * clips inside the same file, instead of the chosen figure. Handy for comparing the two paths in one build.
+ */
+const OVERRIDE = new URLSearchParams(location.search).get('model');
+
+/** Starts loading the figures. Resolves when they are in memory, or failed: avatars then fall back to a capsule. */
 export function preloadAvatars(): Promise<void> {
-  return preload(MODEL, ANIMATIONS);
+  const names = Object.values(FIGURES).flatMap((figure) => [figure.model, figure.animations]);
+  if (OVERRIDE) names.push(OVERRIDE);
+  return preload(...names);
 }
 
 /**
- * One player's figure: `player.glb` animated with clips from `anims_humanoid.glb`. A capsule only if there is
- * no model or it failed to load; while it loads, nothing is drawn.
+ * One player's figure: the male or the female skeleton with its own clips. A capsule only if there is no model
+ * or it failed to load; while it loads, nothing is drawn.
  */
 export class Avatar {
   readonly root = new Group();
@@ -27,7 +41,7 @@ export class Avatar {
   private animator: Animator | null = null;
   private facing = 0;
 
-  constructor(name: string, color: number) {
+  constructor(name: string, color: number, skeleton: Skeleton = 'm') {
     this.label.textContent = name;
     document.getElementById('labels')!.append(this.label);
 
@@ -38,13 +52,17 @@ export class Avatar {
       capsule.traverse((o) => (o.castShadow = true));
       this.root.add(capsule);
     };
-    Promise.all([loadModel(MODEL), loadAnimations(ANIMATIONS)]).then(([model, clips]) => {
-      if (!model) return placeholder();
-      // Blender characters face -Y (front view), which glTF turns into +Z; the game's forward is -Z.
-      model.scene.rotation.y = Math.PI;
-      this.root.add(model.scene);
-      this.animator = new Animator(model.scene, [...model.animations, ...clips]);
-    }, placeholder);
+    const figure = OVERRIDE ? { model: OVERRIDE, animations: null } : FIGURES[skeleton];
+    Promise.all([loadModel(figure.model), figure.animations ? loadAnimations(figure.animations) : Promise.resolve([])]).then(
+      ([model, clips]) => {
+        if (!model) return placeholder();
+        // Blender characters face -Y (front view), which glTF turns into +Z; the game's forward is -Z.
+        model.scene.rotation.y = Math.PI;
+        this.root.add(model.scene);
+        this.animator = new Animator(model.scene, [...model.animations, ...clips], skeleton);
+      },
+      placeholder,
+    );
   }
 
   /** Turns the figure toward its movement, like Valheim: the camera stays free. */
@@ -100,7 +118,11 @@ export class RemotePlayers {
       seen.add(snap.id);
       let p = this.players.get(snap.id);
       if (!p) {
-        p = { avatar: new Avatar(snap.name, snap.color), samples: [], last: new Vector3(snap.x, snap.y, snap.z) };
+        p = {
+          avatar: new Avatar(snap.name, snap.color, snap.skeleton),
+          samples: [],
+          last: new Vector3(snap.x, snap.y, snap.z),
+        };
         this.players.set(snap.id, p);
         this.root.add(p.avatar.root);
       }

@@ -1,4 +1,4 @@
-import { DEFAULT_SEED, TICK_DT, TICK_RATE, createTerrain, moveMode, spawnState } from '@skeleton/shared';
+import { DEFAULT_SEED, TICK_DT, TICK_RATE, createTerrain, moveMode, spawnState, type Skeleton } from '@skeleton/shared';
 import { connectLocal, connectServer, type Connection } from './net/connection.ts';
 import { createView } from './render/renderer.ts';
 import { Environment } from './render/environment.ts';
@@ -21,6 +21,7 @@ const status = document.getElementById('status')!;
 const hud = document.getElementById('hud')!;
 
 const NAME_KEY = 'skeleton.name';
+const FIGURE_KEY = 'skeleton.figure';
 // Single player by default. `?online` joins the co-op server, `?seed=42` picks the single player world.
 const params = new URLSearchParams(location.search);
 const online = params.has('online');
@@ -58,6 +59,31 @@ try {
   // Storage blocked: start with an empty name.
 }
 
+/** The figure picked in the menu: saved next to the name and sent to the simulation on join. */
+const figureButtons = [...document.querySelectorAll<HTMLButtonElement>('#figure [data-skeleton]')];
+let figure: Skeleton = 'm';
+try {
+  figure = localStorage.getItem(FIGURE_KEY) === 'f' ? 'f' : 'm';
+} catch {
+  // Storage blocked: the male skeleton.
+}
+
+function showFigure(): void {
+  for (const button of figureButtons) {
+    const selected = button.dataset.skeleton === figure;
+    button.classList.toggle('selected', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  }
+}
+
+for (const button of figureButtons) {
+  button.addEventListener('click', () => {
+    figure = button.dataset.skeleton === 'f' ? 'f' : 'm';
+    showFigure();
+  });
+}
+showFigure();
+
 /** Chunks around the spawn, in each direction, built before the game shows: no holes under the feet at start. */
 const START_CHUNKS = 2;
 
@@ -81,7 +107,7 @@ if (bench) {
   menu.classList.add('hidden');
   started = true;
   status.textContent = 'Загрузка мира…';
-  start('Bench').catch((err: unknown) => {
+  start('Bench', figure).catch((err: unknown) => {
     started = false;
     status.textContent = err instanceof Error ? err.message : String(err);
     menu.classList.remove('hidden');
@@ -96,19 +122,20 @@ form.addEventListener('submit', (e) => {
   const name = nameInput.value.trim();
   try {
     localStorage.setItem(NAME_KEY, name);
+    localStorage.setItem(FIGURE_KEY, figure);
   } catch {
     // Not critical.
   }
   status.textContent = 'Загрузка мира…';
-  start(name).catch((err: unknown) => {
+  start(name, figure).catch((err: unknown) => {
     started = false;
     status.textContent = err instanceof Error ? err.message : String(err);
     document.exitPointerLock();
   });
 });
 
-async function start(name: string): Promise<void> {
-  const conn: Connection = online ? await connectServer(name) : connectLocal(name, localSeed);
+async function start(name: string, skeleton: Skeleton): Promise<void> {
+  const conn: Connection = online ? await connectServer(name, skeleton) : connectLocal(name, localSeed, skeleton);
   const { id: selfId, seed } = conn.welcome;
   const terrain = createTerrain(seed);
   const view = await createView(canvas);
@@ -148,7 +175,7 @@ async function start(name: string): Promise<void> {
   const orbit = new OrbitCamera(camera, terrain);
   chunks.update(local.state.x, local.state.z);
   await Promise.all([avatarsLoaded, chunks.whenReady(START_CHUNKS)]);
-  const me = new Avatar(name || 'Я', 0xd9a441);
+  const me = new Avatar(name || 'Я', 0xd9a441, skeleton);
   scene.add(chunks.root, remotes.root, me.root, grass.root);
   grass.update(local.state.x, local.state.z, true);
   if (bench) bench.attach({ view, chunks, orbit, terrain, seed });
@@ -171,7 +198,7 @@ async function start(name: string): Promise<void> {
   loaded = true;
   status.textContent = '';
   nameInput.hidden = true;
-  form.querySelector('button')!.textContent = 'Продолжить';
+  form.querySelector('button[type="submit"]')!.textContent = 'Продолжить';
   syncMenu();
 
   let snapTick = conn.welcome.tick;
