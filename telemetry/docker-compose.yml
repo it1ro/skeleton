@@ -1,0 +1,58 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_DB: skeleton
+      POSTGRES_USER: skeleton
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-skeleton}
+    volumes:
+      - db:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U skeleton -d skeleton"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-skeleton}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - grafana:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  collector:
+    build: ./collector
+    environment:
+      PORT: "18010"
+      DIST: /app/dist
+      DATABASE_URL: postgres://skeleton:${POSTGRES_PASSWORD:-skeleton}@db:5432/skeleton
+      NVIDIA_SMI: /usr/bin/nvidia-smi
+      COMMIT: ${COMMIT:-}
+    volumes:
+      - ../packages/client/dist:/app/dist:ro
+    ports:
+      - "127.0.0.1:18010:18010"
+    depends_on:
+      db:
+        condition: service_healthy
+    gpus: all
+    restart: unless-stopped
+
+volumes:
+  db:
+  grafana:

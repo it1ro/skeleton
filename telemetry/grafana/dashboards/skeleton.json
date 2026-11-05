@@ -1,0 +1,115 @@
+{
+  "uid": "skeleton-telemetry",
+  "title": "Skeleton telemetry",
+  "tags": ["skeleton", "game"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "session",
+        "label": "Session",
+        "type": "query",
+        "datasource": { "type": "postgres", "uid": "skeleton-db" },
+        "definition": "SELECT id::text AS __text, id::text AS __value FROM sessions ORDER BY started_at DESC LIMIT 20",
+        "query": "SELECT id::text AS __text, id::text AS __value FROM sessions ORDER BY started_at DESC LIMIT 20",
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false,
+        "sort": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Frame time, ms",
+      "datasource": { "type": "postgres", "uid": "skeleton-db" },
+      "gridPos": { "x": 0, "y": 0, "w": 16, "h": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT ts AS time, fps, p95, max FROM samples WHERE session_id = '$session'::uuid ORDER BY ts"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 1, "fillOpacity": 8 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Chunks and grass",
+      "datasource": { "type": "postgres", "uid": "skeleton-db" },
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT ts AS time, chunks, grass_tiles, grass_pending, chunk_queue FROM samples WHERE session_id = '$session'::uuid ORDER BY ts"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 1, "fillOpacity": 0 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } }
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Hitches",
+      "datasource": { "type": "postgres", "uid": "skeleton-db" },
+      "gridPos": { "x": 0, "y": 9, "w": 12, "h": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT ts AS time, kind, round(ms::numeric, 1) AS ms, data FROM events WHERE session_id = '$session'::uuid AND kind = 'hitch' ORDER BY ts DESC LIMIT 200"
+        }
+      ],
+      "options": { "showHeader": true }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Host: GPU and CPU",
+      "datasource": { "type": "postgres", "uid": "skeleton-db" },
+      "gridPos": { "x": 12, "y": 9, "w": 12, "h": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT ts AS time, gpu_util, gpu_mem_mb, cpu_load FROM host_samples WHERE $__timeFilter(ts) ORDER BY ts"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "lineWidth": 1, "fillOpacity": 0 } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } }
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Sessions",
+      "datasource": { "type": "postgres", "uid": "skeleton-db" },
+      "gridPos": { "x": 0, "y": 18, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT kind, started_at, ended_at, seed, commit, samples, fps, p95, max, hitches FROM session_summary ORDER BY started_at DESC LIMIT 50"
+        }
+      ],
+      "options": { "showHeader": true }
+    }
+  ]
+}
