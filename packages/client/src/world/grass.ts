@@ -13,6 +13,20 @@ import type { ChunkManager } from './chunks.ts';
 const TILE = SCATTER_TILE;
 /** Tiles from the center in each direction: 7 tiles is a 112 m radius. Beyond it the ground texture takes over. */
 const RADIUS = 7;
+/** Linear fog near/far of the environment (render/environment.ts): the density-LOD follows the fog. */
+const FOG_NEAR = 60; // m
+const FOG_RANGE = 320; // m (far − near)
+
+/**
+ * Density-LOD by fog: full grass up to the fog near, fading with the fog amount toward 0 at the fog
+ * far, and nothing past the 112 m ring (the meadow ground texture reads as grass there).
+ */
+function grassDensity(distance: number): number {
+  if (distance > RADIUS * TILE) return 0;
+  const fog = Math.max(0, Math.min(1, (distance - FOG_NEAR) / FOG_RANGE));
+  return 1 - fog;
+}
+
 /** Ceiling on instances a single tile can emit; the pool is sized to the whole ring. */
 const GRASS_PER_TILE = Math.ceil(TILE / GRASS_STEP) ** 2;
 const FLOWER_PER_TILE = Math.ceil(TILE / FLOWER_STEP) ** 2;
@@ -194,7 +208,7 @@ export class GrassField {
       // Bootstrap: the initial ring is built synchronously before the world shows, exactly as before.
       while (this.pending.length > 0) {
         const [px, pz] = this.pending.shift()!;
-        this.placeScatter(buildScatterData(this.terrain, px, pz, this.seed));
+        this.placeScatter(buildScatterData(this.terrain, px, pz, this.seed, this.densityAt(px, pz)));
       }
     } else {
       // Streaming: workers pick up pending tiles, chunks first (see ChunkManager.pumpScatter).
@@ -204,11 +218,16 @@ export class GrassField {
     if (removed) this.rewrite();
   }
 
+  /** Density-LOD factor for a tile, from its tile-center distance to the player. */
+  private densityAt(tx: number, tz: number): number {
+    return grassDensity(Math.hypot(tx - this.center.tx, tz - this.center.tz) * TILE);
+  }
+
   /** Pulled by a free worker: the next wanted tile still waiting for scatter, dropping stale entries. */
-  private nextScatter(): [number, number] | null {
+  private nextScatter(): [number, number, number] | null {
     while (this.pending.length > 0) {
-      const tile = this.pending.shift()!;
-      if (this.wanted.has(key(tile[0], tile[1]))) return tile;
+      const [tx, tz] = this.pending.shift()!;
+      if (this.wanted.has(key(tx, tz))) return [tx, tz, this.densityAt(tx, tz)];
     }
     return null;
   }

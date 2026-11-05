@@ -17,7 +17,7 @@ import { recordHitch } from '../bench/hitches.ts';
 import { composeInstance, InstancedPool, type PoolBlock } from './instanced-pool.ts';
 import type { ChunkData, WorkerRequest, WorkerResponse } from './terrain.worker.ts';
 
-const VIEW_RADIUS = 6; // chunks
+const VIEW_RADIUS = 5; // chunks (~320 m): the far ring is fully fogged, so it is silhouette, not geometry
 const UNLOAD_RADIUS = VIEW_RADIUS + 2;
 const WORKERS = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
 /** Chunk requests in flight per worker. Keeps the queue sorted by distance as the player moves. */
@@ -126,7 +126,7 @@ export class ChunkManager {
   private streaming = false;
   /** Scatter requests in flight per worker; at most one, and only while the worker has no pending chunk. */
   private readonly scatterBusy: number[] = [];
-  private scatterSource: (() => [number, number] | null) | null = null;
+  private scatterSource: (() => [number, number, number] | null) | null = null;
   private scatterSink: ((data: ScatterData) => void) | null = null;
 
   constructor(private readonly seed: number) {
@@ -158,7 +158,7 @@ export class ChunkManager {
   }
 
   /** Registers the grass field's pull/push callbacks: a tile source for free workers and a result sink. */
-  setScatterHandlers(source: () => [number, number] | null, sink: (data: ScatterData) => void): void {
+  setScatterHandlers(source: () => [number, number, number] | null, sink: (data: ScatterData) => void): void {
     this.scatterSource = source;
     this.scatterSink = sink;
   }
@@ -274,9 +274,9 @@ export class ChunkManager {
       if (this.busy[w] > 0 || this.scatterBusy[w] > 0) continue;
       const tile = this.scatterSource();
       if (!tile) break;
-      const [tx, tz] = tile;
+      const [tx, tz, density] = tile;
       this.scatterBusy[w]++;
-      const req: WorkerRequest = { type: 'scatter', seed: this.seed, tx, tz };
+      const req: WorkerRequest = { type: 'scatter', seed: this.seed, tx, tz, density };
       this.workers[w].postMessage(req);
     }
   }

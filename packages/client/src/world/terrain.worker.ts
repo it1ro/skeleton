@@ -21,6 +21,8 @@ export interface ScatterRequest {
   seed: number;
   tx: number;
   tz: number;
+  /** Density-LOD multiplier in 0..1: lowers the instance count with distance, not the geometry. */
+  density: number;
 }
 
 export type WorkerRequest = ChunkRequest | ScatterRequest;
@@ -153,7 +155,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
     const data = buildChunk(t, msg.cx, msg.cz);
     self.postMessage(data, [data.positions.buffer, data.normals.buffer, data.colors.buffer, data.uvs.buffer, data.trees.buffer]);
   } else {
-    const data = buildScatterData(t, msg.tx, msg.tz, msg.seed);
+    const data = buildScatterData(t, msg.tx, msg.tz, msg.seed, msg.density);
     const response: ScatterResult = { type: 'scatter', ...data };
     self.postMessage(response, [
       data.grass.matrices.buffer,

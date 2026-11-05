@@ -73,4 +73,19 @@ describe('buildScatterData', () => {
     const other = buildScatterData(createTerrain(42), 2, 3, 42);
     expect(hashOf(other.grass.matrices)).not.toBe(hashOf(first.grass.matrices));
   });
+
+  it('density-LOD lowers the instance count deterministically', () => {
+    const terrain = createTerrain(1337);
+    const full = buildScatterData(terrain, 0, 0, 1337);
+    const half = buildScatterData(terrain, 0, 0, 1337, 0.5);
+    const halfAgain = buildScatterData(createTerrain(1337), 0, 0, 1337, 0.5);
+    const none = buildScatterData(terrain, 0, 0, 1337, 0);
+
+    expect(half.grass.matrices.length).toBeLessThan(full.grass.matrices.length);
+    expect(half.flowers.matrices.length).toBeLessThan(full.flowers.matrices.length);
+    // Same seed + density → identical placement; density 0 emits no instances at all.
+    expect(hashOf(half.grass.matrices)).toBe(hashOf(halfAgain.grass.matrices));
+    expect(none.grass.matrices.length).toBe(0);
+    expect(none.flowers.matrices.length).toBe(0);
+  });
 });
