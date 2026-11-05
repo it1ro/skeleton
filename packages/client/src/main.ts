@@ -46,6 +46,8 @@ declare global {
   interface Window {
     /** Console handle for the gray→color hook: `__vision(0)` grays the world, `__vision(1)` restores it. */
     __vision?: (vision: number) => number;
+    /** Console handle for the water quality axis: `__water(0)` dead/murky, `__water(1)` live/clear. */
+    __water?: (quality: number) => number;
   }
 }
 try {
@@ -119,6 +121,13 @@ async function start(name: string): Promise<void> {
   window.__vision = (vision: number) => {
     env.visionState = vision;
     return env.visionState;
+  };
+  // `?water=0.5` tunes the water quality axis (dead→live); `__water(q)` does it live in the console.
+  const waterParam = Number(params.get('water'));
+  if (params.has('water') && Number.isFinite(waterParam)) env.waterQuality = waterParam;
+  window.__water = (quality: number) => {
+    env.waterQuality = quality;
+    return env.waterQuality;
   };
   const chunks = new ChunkManager(seed);
   const grass = new GrassField(terrain, seed, chunks);
