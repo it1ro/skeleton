@@ -5,21 +5,14 @@ import {
   Group,
   MeshStandardMaterial,
 } from 'three/webgpu';
-import { hash3, mulberry32, type Terrain } from '@skeleton/shared';
-import { recordHitch } from '../bench/hitches.ts';
-import { composeInstance, InstancedPool, type PoolBlock } from './instanced-pool.ts';
+import { SCATTER_TILE, GRASS_STEP, FLOWER_STEP, buildScatterData, type ScatterData, type Terrain } from '@skeleton/shared';
+import { InstancedPool, type PoolBlock } from './instanced-pool.ts';
+import type { ChunkManager } from './chunks.ts';
 
 /** Square grass tile in meters. The field covers a ring of tiles around the player and follows them. */
-const TILE = 16;
+const TILE = SCATTER_TILE;
 /** Tiles from the center in each direction: 7 tiles is a 112 m radius. Beyond it the ground texture takes over. */
 const RADIUS = 7;
-const GRASS_STEP = 0.5;
-const GRASS_KEEP = 0.55;
-const FLOWER_STEP = 1.6;
-const FLOWER_KEEP = 0.65;
-/** Milliseconds per frame spent building new tiles while the player moves. */
-const BUDGET_MS = 4;
-
 /** Ceiling on instances a single tile can emit; the pool is sized to the whole ring. */
 const GRASS_PER_TILE = Math.ceil(TILE / GRASS_STEP) ** 2;
 const FLOWER_PER_TILE = Math.ceil(TILE / FLOWER_STEP) ** 2;
@@ -40,8 +33,6 @@ interface Tile {
 }
 
 const key = (tx: number, tz: number) => `${tx},${tz}`;
-
-const _shade = new Color();
 
 /**
  * A tuft of crossed tapered quads with vertex colors. No texture and no alpha: the blades are solid,
@@ -142,7 +133,6 @@ export class GrassField {
   private readonly flowerGeometry = flowerMeshGeometry();
   private readonly grassMaterial = new MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
   private readonly flowerMaterial = new MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
-  private readonly flowerPalette = [new Color(0xffe07a), new Color(0xf4f1e0), new Color(0x9aa8ff), new Color(0xe89cb4)];
   private readonly grassPool: InstancedPool;
   private readonly flowerPool: InstancedPool;
   private readonly wanted = new Set<string>();
@@ -152,12 +142,18 @@ export class GrassField {
   constructor(
     private readonly terrain: Terrain,
     private readonly seed: number,
+    private readonly chunks: ChunkManager,
   ) {
     this.grassPool = new InstancedPool(this.grassGeometry, this.grassMaterial, TILE_COUNT * GRASS_PER_TILE, true);
     this.flowerPool = new InstancedPool(this.flowerGeometry, this.flowerMaterial, TILE_COUNT * FLOWER_PER_TILE, true);
     this.grassPool.mesh.receiveShadow = true;
     this.flowerPool.mesh.receiveShadow = true;
     this.root.add(this.grassPool.mesh, this.flowerPool.mesh);
+
+    this.chunks.setScatterHandlers(
+      () => this.nextScatter(),
+      (data) => this.placeScatter(data),
+    );
   }
 
   get tileCount(): number {
@@ -194,28 +190,36 @@ export class GrassField {
         this.pending.push([px, pz]);
       }
     }
-    this.drain(immediate);
+    if (immediate) {
+      // Bootstrap: the initial ring is built synchronously before the world shows, exactly as before.
+      while (this.pending.length > 0) {
+        const [px, pz] = this.pending.shift()!;
+        this.placeScatter(buildScatterData(this.terrain, px, pz, this.seed));
+      }
+    } else {
+      // Streaming: workers pick up pending tiles, chunks first (see ChunkManager.pumpScatter).
+      this.chunks.submitScatter();
+    }
     // Removed tiles leave gaps in the pool; rebuild it compactly once per tile-ring shift.
     if (removed) this.rewrite();
   }
 
-  /** Builds at most `BUDGET_MS` of new tiles per frame; the leading edge catches up over a few frames. */
-  private drain(immediate: boolean): void {
-    if (this.pending.length === 0) return;
-    if (immediate) {
-      while (this.pending.length > 0) this.addTile(this.pending.shift()!);
-      return;
+  /** Pulled by a free worker: the next wanted tile still waiting for scatter, dropping stale entries. */
+  private nextScatter(): [number, number] | null {
+    while (this.pending.length > 0) {
+      const tile = this.pending.shift()!;
+      if (this.wanted.has(key(tile[0], tile[1]))) return tile;
     }
-    const deadline = performance.now() + BUDGET_MS;
-    do {
-      this.addTile(this.pending.shift()!);
-    } while (this.pending.length > 0 && performance.now() < deadline);
+    return null;
   }
 
-  private addTile([tx, tz]: [number, number]): void {
-    const k = key(tx, tz);
-    if (this.tiles.has(k)) return;
-    const tile = this.buildTile(tx, tz);
+  private placeScatter(data: ScatterData): void {
+    const k = key(data.tx, data.tz);
+    if (!this.wanted.has(k) || this.tiles.has(k)) return; // Stale or already placed.
+    const tile: Tile = {
+      grass: data.grass.matrices.length ? { matrix: data.grass.matrices, color: data.grass.colors } : null,
+      flowers: data.flowers.matrices.length ? { matrix: data.flowers.matrices, color: data.flowers.colors } : null,
+    };
     this.tiles.set(k, tile);
     if (tile.grass) this.grassPool.append(tile.grass);
     if (tile.flowers) this.flowerPool.append(tile.flowers);
@@ -230,62 +234,5 @@ export class GrassField {
     }
     this.grassPool.rewrite(grass);
     this.flowerPool.rewrite(flowers);
-  }
-
-  private buildTile(tx: number, tz: number): Tile {
-    const startedAt = performance.now();
-    const ox = tx * TILE;
-    const oz = tz * TILE;
-
-    const grassMatrix = new Float32Array(GRASS_PER_TILE * 16);
-    const grassColor = new Float32Array(GRASS_PER_TILE * 3);
-    let g = 0;
-    const rnd = mulberry32(hash3(tx, tz, this.seed ^ 0x51ed270b));
-    const grassCount = Math.ceil(TILE / GRASS_STEP);
-    for (let j = 0; j < grassCount; j++) {
-      for (let i = 0; i < grassCount; i++) {
-        const x = ox + (i + rnd()) * GRASS_STEP;
-        const z = oz + (j + rnd()) * GRASS_STEP;
-        if (rnd() > GRASS_KEEP) continue;
-        const h = this.terrain.heightAt(x, z);
-        if (this.terrain.biomeAt(x, z, h) !== 'meadows') continue;
-        const rotation = rnd() * Math.PI * 2;
-        const scale = 0.7 + rnd() * 1.0;
-        const shade = rnd();
-        composeInstance(grassMatrix, g, x, h, z, rotation, scale);
-        _shade.setRGB(0.7 + shade * 0.45, 0.8 + shade * 0.3, 0.45 + shade * 0.3);
-        _shade.toArray(grassColor, g * 3);
-        g++;
-      }
-    }
-
-    const flowerMatrix = new Float32Array(FLOWER_PER_TILE * 16);
-    const flowerColor = new Float32Array(FLOWER_PER_TILE * 3);
-    let f = 0;
-    const flowerRnd = mulberry32(hash3(tx, tz, this.seed ^ 0x2f6a88d1));
-    const flowerCount = Math.ceil(TILE / FLOWER_STEP);
-    for (let j = 0; j < flowerCount; j++) {
-      for (let i = 0; i < flowerCount; i++) {
-        const x = ox + (i + flowerRnd()) * FLOWER_STEP;
-        const z = oz + (j + flowerRnd()) * FLOWER_STEP;
-        if (flowerRnd() > FLOWER_KEEP) continue;
-        if (Math.sin(x * 0.11) + Math.cos(z * 0.09) < 0.2) continue;
-        const h = this.terrain.heightAt(x, z);
-        if (this.terrain.biomeAt(x, z, h) !== 'meadows') continue;
-        const rotation = flowerRnd() * Math.PI * 2;
-        const scale = 1 + flowerRnd() * 0.6;
-        const shade = flowerRnd();
-        composeInstance(flowerMatrix, f, x, h, z, rotation, scale);
-        _shade.copy(this.flowerPalette[Math.min(this.flowerPalette.length - 1, Math.floor(shade * this.flowerPalette.length))]);
-        _shade.toArray(flowerColor, f * 3);
-        f++;
-      }
-    }
-
-    recordHitch('grass', startedAt);
-    return {
-      grass: g ? { matrix: grassMatrix.slice(0, g * 16), color: grassColor.slice(0, g * 3) } : null,
-      flowers: f ? { matrix: flowerMatrix.slice(0, f * 16), color: flowerColor.slice(0, f * 3) } : null,
-    };
   }
 }

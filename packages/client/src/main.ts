@@ -120,7 +120,7 @@ async function start(name: string): Promise<void> {
     return env.visionState;
   };
   const chunks = new ChunkManager(seed);
-  const grass = new GrassField(terrain, seed);
+  const grass = new GrassField(terrain, seed, chunks);
   const remotes = new RemotePlayers(terrain);
   const local = new LocalPlayer(terrain, spawnState(terrain));
   const orbit = new OrbitCamera(camera, terrain);
