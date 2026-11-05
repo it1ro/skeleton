@@ -166,6 +166,10 @@ export class ChunkManager {
     return n;
   }
 
+  get queueCount(): number {
+    return this.queue.length;
+  }
+
   update(x: number, z: number): void {
     this.drain();
     const cx = Math.floor(x / CHUNK_SIZE);

@@ -1,0 +1,18 @@
+apiVersion: 1
+
+datasources:
+  - name: Skeleton
+    uid: skeleton-db
+    type: postgres
+    access: proxy
+    url: db:5432
+    database: skeleton
+    user: skeleton
+    secureJsonData:
+      password: skeleton
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: true
+    isDefault: true
+    editable: true

@@ -203,6 +203,8 @@ npm run bench:aio -- --run --seconds 20
 Графика — по правилу 20/80: сначала большие формы, свет и земля, потом полировка критичных мест;
 см. `docs/graphics.md`.
 
+Телеметрия — локально на aio (TimescaleDB + Grafana): `telemetry/README.md`; включается `?telemetry`.
+
 ## Продакшен
 
 `npm run build` собирает клиент в `packages/client/dist`. Для одиночной игры хватает статики.

@@ -13,5 +13,7 @@ assets-src/meshy/
 .tmp/
 # The NPC proxy's model key and endpoint: local only, never committed.
 .env.npc
+# Telemetry stack secrets.
+telemetry/.env
 # Synthesized NPC voice clips: a cache, rebuilt on demand.
 .cache/

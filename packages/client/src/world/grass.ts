@@ -144,6 +144,10 @@ export class GrassField {
     return this.tiles.size;
   }
 
+  get pendingCount(): number {
+    return this.pending.length;
+  }
+
   update(x: number, z: number, immediate = false): void {
     const tx = Math.floor(x / TILE);
     const tz = Math.floor(z / TILE);

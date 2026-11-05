@@ -11,6 +11,7 @@ import { LocalPlayer } from './player/local.ts';
 import { PovituhaFigure } from './npc/figure.ts';
 import { TalkPanel } from './npc/panel.ts';
 import { createBench } from './bench/bench.ts';
+import { startTelemetry } from './telemetry/telemetry.ts';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const menu = document.getElementById('menu')!;
@@ -113,6 +114,7 @@ async function start(name: string): Promise<void> {
   scene.add(chunks.root, remotes.root, me.root, grass.root);
   grass.update(local.state.x, local.state.z, true);
   if (bench) bench.attach({ view, chunks, orbit, terrain, seed });
+  const telemetry = bench ? null : startTelemetry({ seed, backend: view.backend, pixelRatio: renderer.getPixelRatio() });
   const povituha = new PovituhaFigure(terrain, scene, 3.4, -4.6);
   const talk = new TalkPanel({
     llm: params.get('npc') === 'llm',
@@ -202,6 +204,22 @@ async function start(name: string): Promise<void> {
 
     renderer.render(scene, camera);
     input.endFrame();
+
+    if (telemetry) {
+      telemetry.setScene({
+        chunks: chunks.loaded,
+        grassTiles: grass.tileCount,
+        grassPending: grass.pendingCount,
+        chunkQueue: chunks.queueCount,
+        calls: renderer.info.render.calls,
+        triangles: renderer.info.render.triangles,
+        x: pos.x,
+        z: pos.z,
+        biome: terrain.biomeAt(pos.x, pos.z),
+        speed: local.speed,
+      });
+      telemetry.frame(now, dt);
+    }
 
     frames++;
     hudTime += dt;
