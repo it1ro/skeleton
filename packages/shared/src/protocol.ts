@@ -1,5 +1,8 @@
 import type { PlayerInput } from './movement.ts';
 
+/** Which figure a player wears: the male or the female skeleton. Purely cosmetic — same stats and hitbox. */
+export type Skeleton = 'm' | 'f';
+
 /**
  * Wire messages. JSON for now: easy to debug in DevTools.
  * Switch to a binary encoding when snapshots grow (many entities, 10+ players).
@@ -9,6 +12,8 @@ export interface PlayerSnapshot {
   id: number;
   name: string;
   color: number;
+  /** The figure the player chose at the start; remote avatars wear it too. */
+  skeleton: Skeleton;
   x: number;
   y: number;
   z: number;
@@ -18,7 +23,7 @@ export interface PlayerSnapshot {
 }
 
 export type ClientMessage =
-  | { t: 'hello'; name: string }
+  | { t: 'hello'; name: string; skeleton: Skeleton }
   | { t: 'input'; inputs: PlayerInput[] };
 
 export type ServerMessage =

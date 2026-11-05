@@ -17,6 +17,7 @@
     "npc:bench": "tsx scripts/npc-bench.ts",
     "typecheck": "tsc --noEmit",
     "assets": "tsx scripts/build-assets.ts",
+    "assets:rig": "tsx scripts/build-meshy.ts",
     "bench:aio": "tsx scripts/bench-aio.ts",
     "test": "vitest run",
     "test:watch": "vitest"

@@ -6,14 +6,15 @@ import {
   runTicks,
   type PlayerInput,
   type ServerMessage,
+  type Skeleton,
 } from '../src/index.ts';
 
 const forward = (seq: number): PlayerInput => ({ seq, forward: 1, right: 0, yaw: 0, jump: false, sprint: false });
 
-function join(sim: ReturnType<typeof createSim>, name: string) {
+function join(sim: ReturnType<typeof createSim>, name: string, skeleton: Skeleton = 'm') {
   const inbox: ServerMessage[] = [];
   const client = sim.connect((msg) => inbox.push(msg));
-  client.receive({ t: 'hello', name });
+  client.receive({ t: 'hello', name, skeleton });
   return { client, inbox };
 }
 
@@ -36,6 +37,17 @@ describe('sim', () => {
     expect(snapshot.players).toHaveLength(1);
     expect(snapshot.players[0]).toMatchObject({ id: 1, name: 'Ivan' });
     expect(snapshot.players[0].z).toBeLessThan(0);
+  });
+
+  it('carries the chosen figure in snapshots', () => {
+    const sim = createSim(1337);
+    const { inbox } = join(sim, 'Ivan', 'f');
+    for (let i = 0; i < SNAPSHOT_EVERY; i++) sim.step();
+
+    const snapshot = inbox.at(-1);
+    expect(snapshot?.t).toBe('snapshot');
+    if (snapshot?.t !== 'snapshot') return;
+    expect(snapshot.players[0].skeleton).toBe('f');
   });
 
   it('tells the others when a player leaves', () => {

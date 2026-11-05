@@ -1,14 +1,21 @@
 import { AnimationMixer, LoopOnce, type AnimationAction, type AnimationClip, type Object3D } from 'three/webgpu';
-import type { MoveMode } from '@skeleton/shared';
+import type { MoveMode, Skeleton } from '@skeleton/shared';
 
 /**
- * Clip names in anims_humanoid.glb (scripts/build-assets.ts, CLIPS). Own animations from Blender
+ * Clip names in anims_humanoid_m/f.glb (scripts/build-assets.ts, CLIPS). Own animations from Blender
  * must use the same names to replace these.
  */
 type Clip = 'Idle' | 'Walk' | 'Jog' | 'Sprint' | 'JumpStart' | 'JumpLoop' | 'JumpLand' | 'SwimIdle' | 'Swim';
 
-/** Speed (m/s) at which each looped move clip has no foot sliding. Measured by `npm run assets`. */
-const SPEEDS: Partial<Record<Clip, number>> = { Walk: 0.85, Jog: 4.66, Sprint: 7.17, Swim: 1.89 };
+/**
+ * Speed (m/s) at which each looped move clip has no foot sliding, per figure: the clips have the character's
+ * pelvis height baked in, and a 1.80 m skeleton covers more ground than a 1.70 m one. `npm run assets` prints
+ * a fresh table for every character it builds.
+ */
+const SPEEDS: Record<Skeleton, Partial<Record<Clip, number>>> = {
+  m: { Walk: 0.91, Jog: 5.0, Sprint: 7.7, Swim: 2.03 },
+  f: { Walk: 0.87, Jog: 4.77, Sprint: 7.35, Swim: 1.94 },
+};
 const FADE = 0.2;
 const IDLE_BELOW = 0.3;
 const WALK_BELOW = 2.5;
@@ -19,13 +26,20 @@ const LAND_BELOW = 1;
 /** Picks and blends the clips of one character from its movement. */
 export class Animator {
   private readonly mixer: AnimationMixer;
+  /** Natural clip speeds of this figure, m/s. */
+  private readonly speeds: Partial<Record<Clip, number>>;
   private readonly actions = new Map<Clip, AnimationAction>();
   private current: Clip | null = null;
   /** One-shot clip in progress, locomotion waits for it. */
   private oneShot: Clip | null = null;
   private mode: MoveMode = 'ground';
 
-  constructor(root: Object3D, clips: AnimationClip[]) {
+  constructor(
+    root: Object3D,
+    clips: AnimationClip[],
+    skeleton: Skeleton,
+  ) {
+    this.speeds = SPEEDS[skeleton];
     this.mixer = new AnimationMixer(root);
     for (const clip of clips) {
       const action = this.mixer.clipAction(clip);
@@ -61,7 +75,7 @@ export class Animator {
   }
 
   private rate(clip: Clip, speed: number): number {
-    const natural = SPEEDS[clip];
+    const natural = this.speeds[clip];
     return natural ? Math.max(0.5, Math.min(2, speed / natural)) : 1;
   }
 

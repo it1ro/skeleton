@@ -1,4 +1,12 @@
-import { createSim, decode, encode, runTicks, type ClientMessage, type ServerMessage } from '@skeleton/shared';
+import {
+  createSim,
+  decode,
+  encode,
+  runTicks,
+  type ClientMessage,
+  type ServerMessage,
+  type Skeleton,
+} from '@skeleton/shared';
 
 type Welcome = Extract<ServerMessage, { t: 'welcome' }>;
 
@@ -14,14 +22,14 @@ export interface Connection {
  * Single player: the simulation runs on this page and the game talks to it directly, with no server.
  * Messages still go through encode/decode, so the game sees exactly what a server would send.
  */
-export function connectLocal(name: string, seed: number): Connection {
+export function connectLocal(name: string, seed: number, skeleton: Skeleton): Connection {
   const sim = createSim(seed);
   const inbox: ServerMessage[] = [];
   const client = sim.connect((msg) => {
     const copy = decode<ServerMessage>(encode(msg));
     if (copy) inbox.push(copy);
   });
-  client.receive({ t: 'hello', name });
+  client.receive({ t: 'hello', name, skeleton });
   const welcome = inbox.shift();
   if (welcome?.t !== 'welcome') throw new Error('Мир не запустился');
   runTicks(() => sim.step());
@@ -38,14 +46,14 @@ export function connectLocal(name: string, seed: number): Connection {
 }
 
 /** Co-op: connects to the game server on this page's origin and waits for the welcome message. */
-export function connectServer(name: string): Promise<Connection> {
+export function connectServer(name: string, skeleton: Skeleton): Promise<Connection> {
   const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
   const socket = new WebSocket(url);
   const inbox: ServerMessage[] = [];
 
   return new Promise((resolve, reject) => {
     let welcomed = false;
-    socket.onopen = () => socket.send(encode({ t: 'hello', name }));
+    socket.onopen = () => socket.send(encode({ t: 'hello', name, skeleton }));
     socket.onerror = () => {
       if (!welcomed) reject(new Error('Сервер недоступен'));
     };

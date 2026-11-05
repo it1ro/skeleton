@@ -99,7 +99,7 @@ packages/
 scripts/
   build-assets.ts  сборка .glb героя и анимаций: модель из Meshy, скелет и клипы Quaternius UAL
   bench-aio.ts     замер fps на aio/GTX 860M и запись результата в bench-results/
-assets-src/        исходники моделей (в git не входят)
+assets-src/        исходники моделей: Meshy (фигуры) — в git, Quaternius (анимации) — нет
 spikes/            одноразовые технические тесты, не входят в npm workspaces (rust-bevy — тест стека)
 docs/
   README.md          оглавление геймдизайна

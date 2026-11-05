@@ -14,6 +14,10 @@
       <form id="join">
         <h1>Skeleton</h1>
         <input id="name" maxlength="24" placeholder="Имя" autocomplete="off" />
+        <div id="figure" role="group" aria-label="Фигура">
+          <button type="button" data-skeleton="m" aria-pressed="true">Мужчина</button>
+          <button type="button" data-skeleton="f" aria-pressed="false">Женщина</button>
+        </div>
         <button type="submit">Играть</button>
         <p id="status"></p>
         <p class="help">WASD — ходьба · Shift — бег · Space — прыжок · мышь — камера · колесо — зум · P — пиксели · E — говорить · Esc — меню</p>

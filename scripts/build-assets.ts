@@ -18,7 +18,8 @@ const OUT = 'packages/client/src/assets/models';
 const UAL = 'assets-src/quaternius/Universal Animation Library[Standard]/Unreal-Godot';
 
 const PATHS = {
-  hero: 'assets-src/meshy/skeleton.glb',
+  male: 'assets-src/meshy/skeleton_m.glb',
+  female: 'assets-src/meshy/skeleton_f.glb',
   anims: `${UAL}/UAL1_Standard.glb`,
   animsRootMotion: `${UAL}/UAL1_Standard_RM.glb`,
 };
@@ -36,30 +37,58 @@ const CLIPS: Record<string, string> = {
   Swim: 'Swim_Fwd_Loop',
 };
 
-/**
- * Joints of the hero mesh in T-pose, metres, glTF axes (+Y up, +Z forward, +X the hero's left). Measured on the
- * mesh; the right side mirrors the left. The mannequin's joints move here and keep their rotations, so the clips
- * still fit. Joints not listed (fingers, toe tips) move with their parent.
- */
-const HERO_JOINTS: Record<string, vec3> = {
-  pelvis: [0, 0.795, -0.06],
-  spine_01: [0, 0.98, -0.05],
-  spine_02: [0, 1.12, -0.06],
-  spine_03: [0, 1.27, -0.07],
-  neck_01: [0, 1.43, -0.06],
-  Head: [0, 1.53, -0.03],
-  clavicle_l: [0.02, 1.41, -0.04],
-  upperarm_l: [0.2, 1.383, -0.067],
-  lowerarm_l: [0.51, 1.383, -0.067],
-  hand_l: [0.72, 1.383, -0.067],
-  thigh_l: [0.105, 0.81, -0.06],
-  calf_l: [0.125, 0.43, -0.07],
-  foot_l: [0.135, 0.1, -0.08],
-  ball_l: [0.135, 0.02, 0.03],
+/** Joints of the male skeleton in the shroud: T-pose, 1.80 m, measured on the mesh. */
+const MALE_JOINTS: Record<string, vec3> = {
+  pelvis: [0, 0.87, -0.05],
+  spine_01: [0, 1.0, -0.05],
+  spine_02: [0, 1.13, -0.06],
+  spine_03: [0, 1.29, -0.06],
+  neck_01: [0, 1.49, -0.05],
+  Head: [0, 1.58, -0.03],
+  clavicle_l: [0.02, 1.46, -0.045],
+  upperarm_l: [0.19, 1.47, -0.06],
+  lowerarm_l: [0.45, 1.47, -0.06],
+  hand_l: [0.71, 1.47, -0.06],
+  thigh_l: [0.1, 0.87, -0.05],
+  calf_l: [0.095, 0.47, -0.06],
+  foot_l: [0.09, 0.1, -0.08],
+  ball_l: [0.09, 0.02, 0.03],
 };
 
+/** And for the female skeleton: 1.70 m, narrower shoulders, shorter arms. */
+const FEMALE_JOINTS: Record<string, vec3> = {
+  pelvis: [0, 0.83, -0.045],
+  spine_01: [0, 0.95, -0.045],
+  spine_02: [0, 1.07, -0.05],
+  spine_03: [0, 1.19, -0.05],
+  neck_01: [0, 1.38, -0.045],
+  Head: [0, 1.47, -0.03],
+  clavicle_l: [0.015, 1.35, -0.04],
+  upperarm_l: [0.15, 1.32, -0.05],
+  lowerarm_l: [0.36, 1.32, -0.05],
+  hand_l: [0.58, 1.32, -0.05],
+  thigh_l: [0.09, 0.83, -0.045],
+  calf_l: [0.09, 0.46, -0.05],
+  foot_l: [0.09, 0.095, -0.07],
+  ball_l: [0.09, 0.02, 0.03],
+};
+
+/** One character to build: the suffix names its files, `player_m.glb` and `anims_humanoid_m.glb`. */
+interface Character {
+  /** Suffix of the built files: `m` gives `player_m.glb`, `anims_humanoid_m.glb`. */
+  id: string;
+  /** For logs and errors. */
+  title: string;
+  source: string;
+  joints: Record<string, vec3>;
+}
+
+const MALE: Character = { id: 'm', title: 'male skeleton', source: PATHS.male, joints: MALE_JOINTS };
+const FEMALE: Character = { id: 'f', title: 'female skeleton', source: PATHS.female, joints: FEMALE_JOINTS };
+const CHARACTERS = [MALE, FEMALE];
+
 /**
- * Bones that carry the hero's vertices, each with the joint where its segment ends (null: straight up).
+ * Bones that carry a character's vertices, each with the joint where its segment ends (null: straight up).
  * A vertex follows the nearest segment. Fingers stay with the hand: the mesh has them held together.
  */
 const SEGMENTS: Record<string, string | null> = {
@@ -114,11 +143,11 @@ function worldPosition(node: Node): Vector3 {
   return new Vector3().setFromMatrixPosition(new Matrix4().fromArray(node.getWorldMatrix()));
 }
 
-/** Moves the mannequin's joints to the hero's, parents first, and rebinds the skin there. */
-function fitJoints(doc: Document): void {
+/** Moves the mannequin's joints to the character's, parents first, and rebinds the skin there. */
+function fitJoints(doc: Document, jointsTable: Record<string, vec3>): void {
   const skin = doc.getRoot().listSkins()[0];
   const joints = skin.listJoints();
-  const targets = mirrored(HERO_JOINTS, ([x, y, z]): vec3 => [-x, y, z]);
+  const targets = mirrored(jointsTable, ([x, y, z]): vec3 => [-x, y, z]);
   const depth = (n: Node): number => (n.getParentNode() ? depth(n.getParentNode()!) + 1 : 0);
   for (const joint of [...joints].sort((a, b) => depth(a) - depth(b))) {
     const target = targets.get(joint.getName());
@@ -184,14 +213,14 @@ function skinPrimitive(doc: Document, prim: Primitive): void {
   prim.setAttribute('WEIGHTS_0', doc.createAccessor().setType('VEC4').setArray(weightsOut).setBuffer(buffer));
 }
 
-/** What the clips need to know about the hero: its rest pelvis and how long its legs are next to the mannequin's. */
-interface HeroRig {
+/** What the clips need to know about a character: its rest pelvis and how long its legs are next to the mannequin's. */
+interface CharacterRig {
   pelvis: vec3;
   legScale: number;
 }
 
 /** The Meshy mesh on the UAL mannequin's armature. */
-async function buildPlayer(): Promise<HeroRig> {
+async function buildPlayer(character: Character): Promise<CharacterRig> {
   const doc = await io.read(PATHS.anims);
   for (const anim of doc.getRoot().listAnimations()) {
     for (const sampler of anim.listSamplers()) sampler.dispose();
@@ -199,15 +228,15 @@ async function buildPlayer(): Promise<HeroRig> {
   }
   for (const node of doc.getRoot().listNodes()) if (node.getMesh()) node.dispose();
   const mannequinHip = worldPosition(findNode(doc, 'thigh_l')).y;
-  fitJoints(doc);
+  fitJoints(doc, character.joints);
 
-  const hero = await io.read(PATHS.hero);
-  const scene = mergeDocuments(doc, hero).get(hero.getRoot().listScenes()[0]) as Scene;
+  const mesh = await io.read(character.source);
+  const scene = mergeDocuments(doc, mesh).get(mesh.getRoot().listScenes()[0]) as Scene;
   const armature = findNode(doc, 'Armature');
   const skin = doc.getRoot().listSkins()[0];
   for (const node of sceneNodes(scene)) {
     if (!node.getMesh()) continue;
-    if (!new Matrix4().fromArray(node.getWorldMatrix()).equals(new Matrix4())) throw new Error(`${PATHS.hero}: ${node.getName()} is moved, apply transforms`);
+    if (!new Matrix4().fromArray(node.getWorldMatrix()).equals(new Matrix4())) throw new Error(`${character.source}: ${node.getName()} is moved, apply transforms`);
     for (const prim of node.getMesh()!.listPrimitives()) skinPrimitive(doc, prim);
     node.setSkin(skin).setName('Hero');
     armature.addChild(node);
@@ -226,7 +255,7 @@ async function buildPlayer(): Promise<HeroRig> {
     textureCompress({ encoder: sharp, targetFormat: 'webp', resize: TEXTURE_SIZE, quality: 85 }),
     meshopt({ encoder: MeshoptEncoder, level: 'medium' }),
   );
-  await write(doc, 'player.glb');
+  await write(doc, `player_${character.id}.glb`);
   return {
     pelvis: findNode(doc, 'pelvis').getTranslation(),
     legScale: worldPosition(findNode(doc, 'thigh_l')).y / mannequinHip,
@@ -251,7 +280,7 @@ async function measureSpeeds(): Promise<Record<string, number>> {
   return speeds;
 }
 
-async function buildAnimations(hero: HeroRig): Promise<void> {
+async function buildAnimations(rig: CharacterRig, character: Character): Promise<void> {
   const doc = await io.read(PATHS.anims);
   const animPelvis = findNode(doc, 'pelvis').getTranslation();
 
@@ -279,12 +308,12 @@ async function buildAnimations(hero: HeroRig): Promise<void> {
         channel.getSampler()?.dispose();
         channel.dispose();
       } else if (path === 'translation') {
-        // Hips move as on the mannequin, scaled to the hero's legs, so the feet stay on the ground.
+        // Hips move as on the mannequin, scaled to the character's legs, so the feet stay on the ground.
         const out = channel.getSampler()!.getOutput()!;
         const v = [0, 0, 0];
         for (let i = 0; i < out.getCount(); i++) {
           out.getElement(i, v);
-          out.setElement(i, v.map((x, k) => hero.pelvis[k] + (x - animPelvis[k]) * hero.legScale));
+          out.setElement(i, v.map((x, k) => rig.pelvis[k] + (x - animPelvis[k]) * rig.legScale));
         }
       }
     }
@@ -298,13 +327,13 @@ async function buildAnimations(hero: HeroRig): Promise<void> {
     dedup(),
     meshopt({ encoder: MeshoptEncoder, level: 'medium' }),
   );
-  await write(doc, 'anims_humanoid.glb');
+  await write(doc, `anims_humanoid_${character.id}.glb`);
 
   // Shorter legs take shorter steps: the clip's speed scales with them.
   const speeds = await measureSpeeds();
-  console.log('Clip speeds for the hero, m/s (for SPEEDS in world/animator.ts):');
+  console.log(`Clip speeds for the ${character.title}, m/s (for SPEEDS in world/animator.ts):`);
   for (const [game, ual] of Object.entries(CLIPS)) {
-    if (speeds[ual]) console.log(`  ${game.padEnd(10)} ${(speeds[ual] * hero.legScale).toFixed(2)}`);
+    if (speeds[ual]) console.log(`  ${game.padEnd(10)} ${(speeds[ual] * rig.legScale).toFixed(2)}`);
   }
 }
 
@@ -323,4 +352,6 @@ for (const p of Object.values(PATHS)) {
   }
 }
 await MeshoptEncoder.ready;
-await buildAnimations(await buildPlayer());
+for (const character of CHARACTERS) {
+  await buildAnimations(await buildPlayer(character), character);
+}
