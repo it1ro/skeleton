@@ -26,6 +26,7 @@ interface Options {
   name: string;
   seed: number;
   pixels: boolean;
+  vision?: number;
   build: boolean;
   keep: boolean;
   uncapped: boolean;
@@ -99,6 +100,12 @@ function parseOptions(argv: string[]): Options {
       case '--pixels':
         options.pixels = value() !== '0';
         break;
+      case '--vision':
+        options.vision = Number(value());
+        if (!Number.isFinite(options.vision) || options.vision < 0 || options.vision > 1) {
+          throw new Error('--vision takes a number from 0 (gray) to 1 (color)');
+        }
+        break;
       case '--no-build':
         options.build = false;
         break;
@@ -142,6 +149,7 @@ function printHelp(): void {
   --seed <n>            world seed (default: 42)
   --width/--height      viewport (default: 1280x720)
   --pixels 0            full resolution instead of the half-resolution pixel look
+  --vision <0..1>       gray→color hook: 0 for the gray start, 1 for full color (default: 1)
   --vsync               measure with the display cap instead of uncapped
   --run                 run forward instead of standing still (chunk and grass streaming)
   --scene <name>        camera target: spawn (default), water, sky
@@ -247,7 +255,8 @@ async function main(): Promise<void> {
       `http://127.0.0.1:${options.httpPort}/?seed=${options.seed}&bench=${options.seconds}` +
       `&benchName=${encodeURIComponent(options.name)}${options.pixels ? '' : '&pixels=0'}` +
       `${options.run ? '&benchRun' : ''}` +
-      `${options.scene !== 'spawn' ? `&benchScene=${options.scene}` : ''}`;
+      `${options.scene !== 'spawn' ? `&benchScene=${options.scene}` : ''}` +
+      `${options.vision !== undefined ? `&vision=${options.vision}` : ''}`;
     const chrome = [
       process.env.BENCH_PRIME_RUN ?? '/usr/local/bin/prime-run',
       process.env.BENCH_CHROME ?? '/usr/bin/google-chrome-stable',
@@ -374,6 +383,7 @@ async function main(): Promise<void> {
       height: options.height,
       uncapped: options.uncapped,
       pixels: options.pixels,
+      vision: options.vision ?? 1,
     };
     writeFileSync(`${base}.json`, `${JSON.stringify(report, null, 2)}\n`);
     if (screenshot) writeFileSync(`${base}.png`, Buffer.from(screenshot, 'base64'));
