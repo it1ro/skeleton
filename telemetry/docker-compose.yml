@@ -30,6 +30,8 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "127.0.0.1:3000:3000"
+      - "192.168.31.10:3000:3000"
+      - "100.71.120.20:3000:3000"
     depends_on:
       db:
         condition: service_healthy

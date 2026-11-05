@@ -9,13 +9,8 @@
 docker compose up -d --build
 ```
 
-Grafana — `http://127.0.0.1:3000` (admin / `skeleton`), дашборд «Skeleton telemetry».
-С ноутбука:
-
-```bash
-ssh -L 3000:localhost:3000 aio
-# открыть http://localhost:3000
-```
+Grafana — `http://aio:3000` (Tailscale или LAN; admin / `skeleton`), дашборд «Skeleton telemetry».
+На самом aio — `http://127.0.0.1:3000`.
 
 Игра с телеметрией — `http://127.0.0.1:18010/?seed=42&telemetry`. Сборщик отдаёт статику игры и принимает
 `POST /ingest` на том же origin.
@@ -59,5 +54,6 @@ GROUP BY minute ORDER BY minute DESC LIMIT 60;
 
 ## Порты
 
-`5432` Postgres, `3000` Grafana, `18010` сборщик/игра — все на `127.0.0.1`. Публиковать наружу не нужно:
-для ноутбука хватает SSH-туннеля, для Tailscale — при желании поменять bind в compose.
+`5432` Postgres и `18010` сборщик/игра — на `127.0.0.1`; `3000` Grafana — на `127.0.0.1`, LAN
+`192.168.31.10` и Tailscale `100.71.120.20`, поэтому дашборд открывается с tpad по `http://aio:3000`.
+Docker включён, контейнеры `restart: unless-stopped` — после перезагрузки aio поднимаются сами.
