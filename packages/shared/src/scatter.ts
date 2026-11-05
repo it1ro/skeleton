@@ -96,17 +96,28 @@ interface ScatterSpec {
 const GRASS: ScatterSpec = { step: GRASS_STEP, keep: GRASS_KEEP, salt: GRASS_SALT, flower: false };
 const FLOWERS: ScatterSpec = { step: FLOWER_STEP, keep: FLOWER_KEEP, salt: FLOWER_SALT, flower: true };
 
-function scatterOne(terrain: Terrain, tx: number, tz: number, ox: number, oz: number, seed: number, spec: ScatterSpec): ScatterBlock {
+function scatterOne(
+  terrain: Terrain,
+  tx: number,
+  tz: number,
+  ox: number,
+  oz: number,
+  seed: number,
+  spec: ScatterSpec,
+  density: number,
+): ScatterBlock {
   const perSide = Math.ceil(SCATTER_TILE / spec.step);
   const matrices = new Float32Array(perSide * perSide * 16);
   const colors = new Float32Array(perSide * perSide * 3);
+  // Density-LOD: scale the keep probability, never the tuft geometry. Deterministic for a given density.
+  const keep = spec.keep * density;
   let n = 0;
   const rnd = mulberry32(hash3(tx, tz, seed ^ spec.salt));
   for (let j = 0; j < perSide; j++) {
     for (let i = 0; i < perSide; i++) {
       const x = ox + (i + rnd()) * spec.step;
       const z = oz + (j + rnd()) * spec.step;
-      if (rnd() > spec.keep) continue;
+      if (rnd() > keep) continue;
       if (spec.flower && Math.sin(x * 0.11) + Math.cos(z * 0.09) < 0.2) continue;
       const h = terrain.heightAt(x, z);
       if (terrain.biomeAt(x, z, h) !== 'meadows') continue;
@@ -134,14 +145,24 @@ function scatterOne(terrain: Terrain, tx: number, tz: number, ox: number, oz: nu
  * Builds the scatter (grass tufts and flowers) for one tile as precomposed instance blocks.
  * Pure and deterministic: the same `seed` always gives the same placement, matching the previous
  * main-thread `GrassField.buildTile` exactly (rnd order, salts and matrix floats are unchanged).
+ *
+ * `density` (0..1) is the density-LOD multiplier: it lowers the keep probability and therefore the
+ * instance count. The tuft geometry is untouched and the result is deterministic; `density = 1`
+ * reproduces the golden placement exactly. Defaults to full density.
  */
-export function buildScatterData(terrain: Terrain, tx: number, tz: number, seed: number): ScatterData {
+export function buildScatterData(
+  terrain: Terrain,
+  tx: number,
+  tz: number,
+  seed: number,
+  density = 1,
+): ScatterData {
   const ox = tx * SCATTER_TILE;
   const oz = tz * SCATTER_TILE;
   return {
     tx,
     tz,
-    grass: scatterOne(terrain, tx, tz, ox, oz, seed, GRASS),
-    flowers: scatterOne(terrain, tx, tz, ox, oz, seed, FLOWERS),
+    grass: scatterOne(terrain, tx, tz, ox, oz, seed, GRASS, density),
+    flowers: scatterOne(terrain, tx, tz, ox, oz, seed, FLOWERS, density),
   };
 }
