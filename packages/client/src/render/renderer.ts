@@ -1,4 +1,5 @@
-import { ACESFilmicToneMapping, PCFShadowMap, PerspectiveCamera, Scene, WebGPURenderer } from 'three/webgpu';
+import { ACESFilmicToneMapping, DirectRenderPipeline, PCFShadowMap, PerspectiveCamera, Scene, WebGPURenderer } from 'three/webgpu';
+import type { Node } from 'three/webgpu';
 
 /** Share of the device pixels to render with the pixel look on. The CSS upscale keeps pixels sharp. */
 const PIXEL_SCALE = 0.5;
@@ -9,6 +10,10 @@ export interface View {
   camera: PerspectiveCamera;
   backend: 'WebGPU' | 'WebGL2';
   togglePixels(): void;
+  /** Sets the final output node (color curve). Applied inline, so there is no extra framebuffer. */
+  setOutputNode(node: Node): void;
+  /** Renders through the pipeline that folds the output node into the material shaders. */
+  render(scene: Scene, camera: PerspectiveCamera): void;
 }
 
 /** WebGPU where available, WebGL2 otherwise: one renderer, one material system (TSL/nodes). */
@@ -22,6 +27,10 @@ export async function createView(canvas: HTMLCanvasElement): Promise<View> {
   const scene = new Scene();
   const camera = new PerspectiveCamera(65, 1, 0.1, 1000);
   let pixels = true;
+
+  // Tone mapping, color space and the color curve are applied inline in the material shaders,
+  // instead of the renderer's intermediate framebuffer + output pass.
+  const pipeline = new DirectRenderPipeline(renderer);
 
   const resize = () => {
     const ratio = pixels ? PIXEL_SCALE : Math.min(window.devicePixelRatio, 2);
@@ -42,6 +51,13 @@ export async function createView(canvas: HTMLCanvasElement): Promise<View> {
     togglePixels() {
       pixels = !pixels;
       resize();
+    },
+    setOutputNode(node) {
+      pipeline.outputNode = node;
+      pipeline.needsUpdate = true;
+    },
+    render(scene, camera) {
+      pipeline.render(scene, camera);
     },
   };
 }
