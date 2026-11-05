@@ -5,19 +5,16 @@ import {
   ConeGeometry,
   CylinderGeometry,
   Group,
-  InstancedMesh,
   LinearFilter,
   LinearMipmapLinearFilter,
-  Matrix4,
   Mesh,
   MeshStandardMaterial,
-  Quaternion,
   RepeatWrapping,
   SRGBColorSpace,
-  Vector3,
 } from 'three/webgpu';
 import { CHUNK_SEGMENTS, CHUNK_SIZE } from '@skeleton/shared';
 import { recordHitch } from '../bench/hitches.ts';
+import { composeInstance, InstancedPool, type PoolBlock } from './instanced-pool.ts';
 import type { ChunkData, ChunkRequest } from './terrain.worker.ts';
 
 const VIEW_RADIUS = 6; // chunks
@@ -25,10 +22,17 @@ const UNLOAD_RADIUS = VIEW_RADIUS + 2;
 const WORKERS = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
 /** Chunk requests in flight per worker. Keeps the queue sorted by distance as the player moves. */
 const IN_FLIGHT_PER_WORKER = 2;
+/** Every chunk that can be loaded at once: the unload square is `2*UNLOAD_RADIUS+1` chunks wide. */
+const MAX_LOADED_CHUNKS = (UNLOAD_RADIUS * 2 + 1) ** 2;
+/** `treesInChunk` attempts at most 70 trees per chunk (see shared/terrain.ts). */
+const TREES_PER_CHUNK = 70;
+const TREE_CAPACITY = MAX_LOADED_CHUNKS * TREES_PER_CHUNK;
 
 interface Chunk {
   group: Group;
   ready: boolean;
+  /** Trunk/crown matrix block in world space; `null` when the chunk has no trees. */
+  trees: PoolBlock | null;
 }
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
@@ -113,6 +117,8 @@ export class ChunkManager {
   private readonly crownGeometry = new ConeGeometry(1.9, 6, 7).translate(0, 5.5, 0);
   private readonly trunkMaterial = new MeshStandardMaterial({ color: 0x5a3d26, roughness: 1 });
   private readonly crownMaterial = new MeshStandardMaterial({ color: 0x2f5a2a, roughness: 1, flatShading: true });
+  private readonly trunkPool: InstancedPool;
+  private readonly crownPool: InstancedPool;
   private center = { cx: Number.NaN, cz: Number.NaN };
   private waiters: { radius: number; resolve: () => void }[] = [];
   private readonly queue: ChunkData[] = [];
@@ -120,6 +126,14 @@ export class ChunkManager {
   private streaming = false;
 
   constructor(private readonly seed: number) {
+    this.trunkPool = new InstancedPool(this.trunkGeometry, this.trunkMaterial, TREE_CAPACITY, false);
+    this.crownPool = new InstancedPool(this.crownGeometry, this.crownMaterial, TREE_CAPACITY, false);
+    this.trunkPool.mesh.castShadow = true;
+    this.trunkPool.mesh.receiveShadow = true;
+    this.crownPool.mesh.castShadow = true;
+    this.crownPool.mesh.receiveShadow = true;
+    this.root.add(this.trunkPool.mesh, this.crownPool.mesh);
+
     for (let w = 0; w < WORKERS; w++) {
       const worker = new Worker(new URL('./terrain.worker.ts', import.meta.url), { type: 'module' });
       worker.onmessage = (e: MessageEvent<ChunkData>) => {
@@ -177,14 +191,17 @@ export class ChunkManager {
     if (cx === this.center.cx && cz === this.center.cz) return;
     this.center = { cx, cz };
 
+    let removed = false;
     for (const [k, chunk] of this.chunks) {
       const [x0, z0] = k.split(',').map(Number);
       if (Math.max(Math.abs(x0 - cx), Math.abs(z0 - cz)) > UNLOAD_RADIUS) {
         this.dispose(chunk);
         this.chunks.delete(k);
+        removed = true;
       }
     }
     this.pump();
+    if (removed) this.rewriteTrees();
   }
 
   /** Builds one queued chunk per frame, nearest first: a chunk boundary no longer lands in a single frame. */
@@ -221,7 +238,7 @@ export class ChunkManager {
       const w = this.busy.indexOf(Math.min(...this.busy));
       if (this.busy[w] >= IN_FLIGHT_PER_WORKER) break;
       this.busy[w]++;
-      this.chunks.set(key(x, z), { group: new Group(), ready: false });
+      this.chunks.set(key(x, z), { group: new Group(), ready: false, trees: null });
       const req: ChunkRequest = { seed: this.seed, cx: x, cz: z };
       this.workers[w].postMessage(req);
     }
@@ -253,23 +270,17 @@ export class ChunkManager {
 
     const count = data.trees.length / 5;
     if (count > 0) {
-      const trunks = new InstancedMesh(this.trunkGeometry, this.trunkMaterial, count);
-      const crowns = new InstancedMesh(this.crownGeometry, this.crownMaterial, count);
-      const m = new Matrix4();
-      const q = new Quaternion();
-      const up = new Vector3(0, 1, 0);
+      const matrix = new Float32Array(count * 16);
+      const ox = data.cx * CHUNK_SIZE;
+      const oz = data.cz * CHUNK_SIZE;
       for (let i = 0; i < count; i++) {
         const [x, y, z, s, r] = data.trees.subarray(i * 5, i * 5 + 5);
-        m.compose(new Vector3(x, y - 0.3, z), q.setFromAxisAngle(up, r), new Vector3(s, s, s));
-        trunks.setMatrixAt(i, m);
-        crowns.setMatrixAt(i, m);
+        composeInstance(matrix, i, x + ox, y - 0.3, z + oz, r, s);
       }
-      for (const mesh of [trunks, crowns]) {
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        mesh.computeBoundingSphere();
-        chunk.group.add(mesh);
-      }
+      const trees: PoolBlock = { matrix, color: null };
+      chunk.trees = trees;
+      this.trunkPool.append(trees);
+      this.crownPool.append(trees);
     }
 
     chunk.group.position.set(data.cx * CHUNK_SIZE, 0, data.cz * CHUNK_SIZE);
@@ -282,8 +293,17 @@ export class ChunkManager {
   private dispose(chunk: Chunk): void {
     this.root.remove(chunk.group);
     for (const child of chunk.group.children) {
-      if (child instanceof InstancedMesh) child.dispose();
-      else if (child instanceof Mesh) child.geometry.dispose();
+      if (child instanceof Mesh) child.geometry.dispose();
     }
+  }
+
+  /** Removed chunks leave gaps in the tree pools; rebuild them compactly once per unload. */
+  private rewriteTrees(): void {
+    const trees: PoolBlock[] = [];
+    for (const chunk of this.chunks.values()) {
+      if (chunk.trees) trees.push(chunk.trees);
+    }
+    this.trunkPool.rewrite(trees);
+    this.crownPool.rewrite(trees);
   }
 }
