@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { groundColor } from '../src/ground-color.ts';
-import type { Biome } from '../src/terrain.ts';
+import { groundColor, groundColorBlend } from '../src/ground-color.ts';
+import type { Biome } from '../src/biomes.ts';
 
 /** Linear → sRGB, for appearance checks (neon, luma). */
 const lin2srgb = (c: number): number => (c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
@@ -75,4 +75,14 @@ describe('groundColor', () => {
     expect(luma(ocean)).toBeLessThan(0.5); // murky, not bright
     expect(luma(ocean)).toBeLessThan(luma(beach)); // darker than the shore
   });
+
+  it('blends the soil pair without a seam, and t=0 is exactly the single-biome color', () => {
+    const single = groundColor('meadows', 6, 0.2, 10, 20);
+    expect(groundColorBlend('meadows', 'forest', 0, 6, 0.2, 10, 20)).toEqual(single);
+
+    const other = groundColor('forest', 6, 0.2, 10, 20);
+    const half = groundColorBlend('meadows', 'forest', 0.5, 6, 0.2, 10, 20);
+    for (let i = 0; i < 3; i++) expect(half[i]).toBeCloseTo((single[i] + other[i]) / 2, 12);
+  });
 });
+

@@ -1,13 +1,15 @@
 import { createNoise2D, type NoiseFunction2D } from 'simplex-noise';
-import { CHUNK_SIZE, WATER_LEVEL } from './constants.ts';
+import {
+  BIOMES,
+  FOREST_NOISE_SCALE,
+  forestShare,
+  pickTreeKind,
+  selectBiome,
+  type Biome,
+  type TreeKind,
+} from './biomes.ts';
+import { CHUNK_SIZE } from './constants.ts';
 import { hash3, mulberry32 } from './rng.ts';
-
-export type Biome = 'ocean' | 'beach' | 'meadows' | 'forest' | 'mountain';
-
-/** Tree silhouettes the client can draw. The order is the wire format: `kind` is packed as this index. */
-export const TREE_KINDS = ['spruce', 'birch', 'dead'] as const;
-
-export type TreeKind = (typeof TREE_KINDS)[number];
 
 export interface TreeSpot {
   x: number;
@@ -32,12 +34,11 @@ export interface PropSpot {
   kind: PropKind;
 }
 
-/** Which silhouette grows in a biome. Roll is 0..1; the same seed always gives the same forest. */
-function kindFor(biome: Biome, roll: number): TreeKind {
-  if (biome === 'forest') return roll < 0.62 ? 'spruce' : roll < 0.88 ? 'birch' : 'dead';
-  if (biome === 'meadows') return roll < 0.45 ? 'birch' : roll < 0.8 ? 'spruce' : 'dead';
-  if (biome === 'mountain') return roll < 0.5 ? 'dead' : 'spruce';
-  return 'spruce';
+/** A point's biome plus its feathered border: `mix` is the share of `mixWith`, 0..0.5. */
+export interface BiomeBlend {
+  biome: Biome;
+  mixWith: Biome;
+  mix: number;
 }
 
 /**
@@ -49,6 +50,12 @@ export interface Terrain {
   heightAt(x: number, z: number): number;
   /** Pass `height` when the caller already sampled it; avoids a second expensive noise lookup. */
   biomeAt(x: number, z: number, height?: number): Biome;
+  /**
+   * Biome plus the feathered soil border, written into `out` (no allocation: this runs per vertex).
+   * `mixWith` is the neighbouring biome and `mix` (0..0.5) is its share; water, shore and peaks never
+   * blend, so their mix is 0 and `mixWith === biome`.
+   */
+  biomeBlendAt(x: number, z: number, out: BiomeBlend, height?: number): void;
   treesInChunk(cx: number, cz: number): TreeSpot[];
   /** Погост props: grave mounds, their crosses, and scattered bones. */
   propsInChunk(cx: number, cz: number): PropSpot[];
@@ -105,10 +112,22 @@ export function createTerrain(seed: number): Terrain {
 
   function biomeAt(x: number, z: number, height?: number): Biome {
     const h = height === undefined ? heightAt(x, z) : height;
-    if (h < WATER_LEVEL - 0.5) return 'ocean';
-    if (h < WATER_LEVEL + 1.5) return 'beach';
-    if (h > 38) return 'mountain';
-    return forestNoise(x / 300, z / 300) > 0.1 ? 'forest' : 'meadows';
+    return selectBiome(h, forestNoise, x, z);
+  }
+
+  function biomeBlendAt(x: number, z: number, out: BiomeBlend, height?: number): void {
+    const h = height === undefined ? heightAt(x, z) : height;
+    const biome = biomeAt(x, z, h);
+    out.biome = biome;
+    out.mixWith = biome;
+    out.mix = 0;
+    // Only the soil pair (forest/meadows) feathers: the same noise that assigns it decides the edge.
+    if (BIOMES[biome].surface !== 'soil') return;
+    const share = forestShare(forestNoise(x / FOREST_NOISE_SCALE, z / FOREST_NOISE_SCALE));
+    out.mixWith = biome === 'forest' ? 'meadows' : 'forest';
+    out.mix = biome === 'forest' ? 1 - share : share;
+    // Deep inside a soil biome there is no neighbour to blend with; keep the pair invariant.
+    if (out.mix === 0) out.mixWith = biome;
   }
 
   function treesInChunk(cx: number, cz: number): TreeSpot[] {
@@ -123,11 +142,11 @@ export function createTerrain(seed: number): Terrain {
       const roll = r();
       const h = heightAt(x, z);
       const biome = biomeAt(x, z, h);
-      const density = biome === 'forest' ? 0.55 : biome === 'meadows' ? 0.04 : 0;
-      if (roll >= density) continue;
+      const growing = BIOMES[biome];
+      if (roll >= growing.trees.density) continue;
       // Keep the spawn point clear.
       if (x * x + z * z < 12 * 12) continue;
-      const kind = kindFor(biome, r());
+      const kind = pickTreeKind(growing.trees.mix, r());
       trees.push({ x, y: h, z, scale, rotation, kind });
     }
     return trees;
@@ -138,7 +157,7 @@ export function createTerrain(seed: number): Terrain {
     if (x * x + z * z > POGOST_RADIUS * POGOST_RADIUS) return false;
     if (x * x + z * z < 14 * 14) return false;
     const h = heightAt(x, z);
-    return biomeAt(x, z, h) === 'meadows';
+    return BIOMES[biomeAt(x, z, h)].pogost;
   }
 
   /**
@@ -197,5 +216,5 @@ export function createTerrain(seed: number): Terrain {
     return props;
   }
 
-  return { seed, heightAt, biomeAt, treesInChunk, propsInChunk };
+  return { seed, heightAt, biomeAt, biomeBlendAt, treesInChunk, propsInChunk };
 }

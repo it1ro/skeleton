@@ -14,7 +14,7 @@
  * - **Земля на склоне.** Flat ground grows moss, a slope exposes earth, a cliff exposes rock.
  */
 
-import type { Biome } from './terrain.ts';
+import { BIOME_NAMES, BIOMES, type Biome } from './biomes.ts';
 
 /** sRGB→linear, bit-identical to three.js `ColorManagement.SRGBToLinear`. */
 function srgbToLinear(c: number): number {
@@ -33,14 +33,10 @@ const rgb = (hex: number): Rgb => [
 /** Above this height the world is snow. Matches the previous worker threshold. */
 const SNOW_LINE = 62;
 
-/** Biome base colors, muted toward moss and olive (`docs/graphics.md` «Палитра»). */
-const BIOME: Record<Biome, Rgb> = {
-  ocean: rgb(0x6b6146),
-  beach: rgb(0xc9b58a),
-  meadows: rgb(0x6a7a4a), // was 0x6f9a3a — grass-olive, not neon
-  forest: rgb(0x3f4a32), // was 0x3f6a2c — moss
-  mountain: rgb(0x8d8a84),
-};
+/** Biome base colors from the registry, converted to linear like three.js `new Color(hex)`. */
+const BASE: Record<Biome, Rgb> = Object.fromEntries(
+  BIOME_NAMES.map((name) => [name, rgb(BIOMES[name].ground)]),
+) as Record<Biome, Rgb>;
 
 /** Ground patch colors (`docs/graphics.md` «Палитра»). */
 const MOSS = rgb(0x3f4a32);
@@ -129,13 +125,38 @@ function fields(wx: number, wz: number): { moist: number; mossN: number; ashN: n
  */
 export function groundColor(biome: Biome, height: number, slope: number, wx: number, wz: number): Rgb {
   if (height > SNOW_LINE) return SNOW;
-  if (biome === 'ocean') return BIOME.ocean;
-  if (biome === 'beach') return BIOME.beach;
-  if (biome === 'mountain') return mix(BIOME.mountain, ROCK, smoothstep(0.25, 0.55, slope));
 
-  // Land (meadows/forest): grass is the base, and the moisture/coverage fields paint patches on top.
+  const surface = BIOMES[biome].surface;
+  const base = BASE[biome];
+  if (surface === 'rock') return mix(base, ROCK, smoothstep(0.25, 0.55, slope));
+  if (surface !== 'soil') return base;
+  return soilColor(base, slope, wx, wz);
+}
+
+/**
+ * Blends two biomes by `t`, the share of `b` (0..1). The soil pair (forest/meadows) shares the patch
+ * math, so the common feathered edge costs one base lerp instead of two full color evaluations.
+ */
+export function groundColorBlend(
+  a: Biome,
+  b: Biome,
+  t: number,
+  height: number,
+  slope: number,
+  wx: number,
+  wz: number,
+): Rgb {
+  if (t <= 0) return groundColor(a, height, slope, wx, wz);
+  if (height > SNOW_LINE) return SNOW;
+  if (BIOMES[a].surface === 'soil' && BIOMES[b].surface === 'soil') {
+    return soilColor(mix(BASE[a], BASE[b], t), slope, wx, wz);
+  }
+  return mix(groundColor(a, height, slope, wx, wz), groundColor(b, height, slope, wx, wz), t);
+}
+
+/** Soil ground: grass base plus the moisture/coverage patches, shared by every soil biome. */
+function soilColor(base: Rgb, slope: number, wx: number, wz: number): Rgb {
   const { moist, mossN, ashN } = fields(wx, wz);
-  const base = BIOME[biome];
 
   const earthT = smoothstep(0.1, 0.34, slope);
   const rockT = smoothstep(0.34, 0.6, slope);

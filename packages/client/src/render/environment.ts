@@ -17,7 +17,7 @@ import {
   type Scene,
 } from 'three/webgpu';
 import type { Node } from 'three/webgpu';
-import { DAY_LENGTH, TICK_DT, WATER_LEVEL, type Biome } from '@skeleton/shared';
+import { BIOMES, DAY_LENGTH, TICK_DT, WATER_LEVEL, type Biome } from '@skeleton/shared';
 import { applyVision, clampVision } from './vision.ts';
 import { DEFAULT_SHADOW, shadowSettings, type ShadowSettings } from './shadow.ts';
 import {
@@ -117,14 +117,6 @@ const CURVE_CONTRAST = 0.2;
 const CURVE_NIGHT_GAIN = 0.86;
 
 // --- Fog ---------------------------------------------------------------------
-/** Far fog [near, far] per biome: the Погост hides close, the mountains open up. */
-const FOG_BY_BIOME: Record<Biome, [number, number]> = {
-  meadows: [30, 200], // Погост/Поле
-  forest: [35, 220],
-  mountain: [90, 400],
-  beach: [50, 320],
-  ocean: [60, 380],
-};
 /** Soft blobs hugging the ground (0–2 m): hide the grass ring and LOD seams, not a full-screen effect. */
 const FOG_BLOBS = 5;
 const FOG_BLOB_OPACITY = 0.32;
@@ -396,7 +388,7 @@ export class Environment {
     this.fog.color.copy(this.sky);
     // Far fog follows the biome: dense over the Погост, open in the mountains. Lerped so biome crossings
     // breathe instead of snapping.
-    const [fogNear, fogFar] = FOG_BY_BIOME[biome];
+    const [fogNear, fogFar] = BIOMES[biome].fog;
     this.fog.near += (fogNear - this.fog.near) * 0.04;
     this.fog.far += (fogFar - this.fog.far) * 0.04;
 

@@ -90,6 +90,7 @@
 | `packages/client/src/world/grass.ts` | трава: пучок, плотность, LOD |
 | `packages/client/src/world/chunks.ts` | чанки, пулы деревьев, тени |
 | `packages/client/src/render/environment.ts` | небо, свет, туман, вода, `vision` |
+| `packages/shared/src/biomes.ts` | реестр биомов: условия, палитра, деревья, трава, туман |
 
 ## Не решено
 

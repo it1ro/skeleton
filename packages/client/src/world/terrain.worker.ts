@@ -6,8 +6,8 @@ import {
   TREE_KINDS,
   buildScatterData,
   createTerrain,
-  groundColor,
-  type Biome,
+  groundColorBlend,
+  type BiomeBlend,
   type ScatterData,
   type Terrain,
 } from '@skeleton/shared';
@@ -64,19 +64,18 @@ function buildChunk(t: Terrain, cx: number, cz: number): ChunkData {
   const ox = cx * CHUNK_SIZE;
   const oz = cz * CHUNK_SIZE;
 
-  // Height/biome cache on a (n+2)×(n+2) grid: one heightAt per point feeds positions, normals and
-  // biome, instead of 5 heightAt calls per vertex (self + 4 normal neighbours).
+  // Height cache on a (n+2)×(n+2) grid: one heightAt per point feeds positions and normals, instead of
+  // 5 heightAt calls per vertex (self + 4 normal neighbours).
   const heights = new Float32Array(N * N);
-  const biomes = new Array<Biome>(N * N);
   for (let gj = 0; gj < N; gj++) {
     const wz = oz + (gj - 1) * step;
     for (let gi = 0; gi < N; gi++) {
       const wx = ox + (gi - 1) * step;
-      const h = t.heightAt(wx, wz);
-      heights[gj * N + gi] = h;
-      biomes[gj * N + gi] = t.biomeAt(wx, wz, h);
+      heights[gj * N + gi] = t.heightAt(wx, wz);
     }
   }
+  // Scratch for the per-vertex biome blend: the worker builds thousands of vertices, no allocation.
+  const blend: BiomeBlend = { biome: 'meadows', mixWith: 'meadows', mix: 0 };
 
   const positions = new Float32Array(n * n * 3);
   const normals = new Float32Array(n * n * 3);
@@ -109,9 +108,12 @@ function buildChunk(t: Terrain, cx: number, cz: number): ChunkData {
       normals[k + 2] = nz / len;
 
       const slope = 1 - ny / len;
-      const biome = biomes[gj * N + gi];
-      // Ground color: muted biome base plus moss/earth/ash/puddle patches by noise, slope and height.
-      const c = groundColor(biome, h, slope, ox + lx, oz + lz);
+      const wx = ox + lx;
+      const wz = oz + lz;
+      t.biomeBlendAt(wx, wz, blend, h);
+      // Ground color: muted biome base (mixed with the neighbour at a feathered soil edge) plus
+      // moss/earth/ash/puddle patches by noise, slope and height.
+      const c = groundColorBlend(blend.biome, blend.mixWith, blend.mix, h, slope, wx, wz);
       // Small world-space jitter breaks up flat color areas; world-space so chunk borders don't seam.
       const jr = Math.sin((ox + lx) * 127.1 + (oz + lz) * 311.7) * 43758.5453;
       const jitter = 0.92 + (jr - Math.floor(jr)) * 0.16;
