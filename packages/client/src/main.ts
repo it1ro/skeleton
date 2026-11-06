@@ -15,7 +15,7 @@ import { Neodobudka } from './npc/neodobudka.ts';
 import { TalkPanel } from './npc/panel.ts';
 import { createBench } from './bench/bench.ts';
 import { loadWaterField } from './render/water-field-source.ts';
-import { startTelemetry } from './telemetry/telemetry.ts';
+import { startTelemetry, type TelemetryAudio } from './telemetry/telemetry.ts';
 import { Mixer, type AudioDebug, type LevelsPatch } from './audio/mixer.ts';
 import { startWind } from './audio/wind.ts';
 import { Music, type MusicDebug } from './audio/music.ts';
@@ -107,6 +107,12 @@ const eqParam = params.get('eq');
 if (eqParam === '0' || eqParam === 'off') music?.setEq(false);
 let musicMode: MusicMode = parseMusicMode(params.get('music'));
 let musicCycleStart = performance.now();
+
+/** One read of the mix for the telemetry sample; `null` without sound (`?audio=0`, the bench). */
+function audioTelemetry(): TelemetryAudio | null {
+  if (!audio) return null;
+  return { ...audio.pulse(), track: music?.debug().track ?? null };
+}
 
 declare global {
   interface Window {
@@ -364,7 +370,11 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
   scene.add(nit);
   grass.update(local.state.x, local.state.z, true);
   if (bench) bench.attach({ view, chunks, orbit, terrain, seed });
-  const telemetry = bench ? null : startTelemetry({ seed, backend: view.backend, pixelRatio: renderer.getPixelRatio() });
+  const telemetry = bench
+    ? null
+    : startTelemetry({ seed, backend: view.backend, pixelRatio: renderer.getPixelRatio(), audio: audioTelemetry });
+  // The mix starts on the Play click, before the world: the mixer buffered its failures until now.
+  if (sound) sound.issues.setSink(telemetry ? (issue) => telemetry.event('audio', 0, issue) : null);
   const povituha = new PovituhaFigure(terrain, scene, 3.4, -4.6);
   // The sleeping guard at the foot of the barrow the first frame looks at: static, the pose is baked into the mesh.
   const spot = guardSpot(mound);

@@ -22,9 +22,15 @@ export async function startWind(mixer: Mixer): Promise<Wind | null> {
   if (!context || !bus) return null;
 
   const response = await fetch(windUrl);
-  if (!response.ok) return null;
+  if (!response.ok) {
+    mixer.issues.push({ subtype: 'wind', message: `HTTP ${response.status}` });
+    return null;
+  }
   const data = await response.arrayBuffer();
-  const buffer = await context.decodeAudioData(data);
+  const buffer = await context.decodeAudioData(data).catch((error: unknown) => {
+    mixer.issues.push({ subtype: 'wind', message: error instanceof Error ? error.message : String(error) });
+    throw error;
+  });
 
   const source = context.createBufferSource();
   source.buffer = buffer;

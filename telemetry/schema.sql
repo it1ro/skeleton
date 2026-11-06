@@ -42,7 +42,18 @@ CREATE TABLE IF NOT EXISTS samples (
   x real,
   z real,
   biome text,
-  speed real
+  speed real,
+  audio_state text,
+  audio_rate integer,
+  audio_latency_ms real,
+  audio_underrun_ms real,
+  audio_underrun_events integer,
+  audio_played_ms real,
+  audio_stats boolean,
+  rms_db real,
+  peak_db real,
+  audio_muted boolean,
+  music_track text
 );
 SELECT create_hypertable('samples', 'ts', if_not_exists => TRUE);
 CREATE INDEX IF NOT EXISTS samples_session_ts ON samples (session_id, ts DESC);
@@ -121,7 +132,15 @@ SELECT s.id,
        round(avg(x.fps)::numeric, 1) AS fps,
        round(avg(x.p95)::numeric, 1) AS p95,
        round(max(x.max)::numeric, 1) AS max,
-       sum(x.hitches) AS hitches
+       sum(x.hitches) AS hitches,
+       count(x.audio_state) AS audio_samples,
+       round((sum(x.audio_played_ms) / 1000)::numeric, 1) AS audio_played_s,
+       round(sum(x.audio_underrun_ms)::numeric, 1) AS audio_underrun_ms,
+       sum(x.audio_underrun_events) AS audio_underrun_events,
+       round((100 * sum(x.audio_underrun_ms) / nullif(sum(x.audio_played_ms), 0))::numeric, 2) AS audio_glitch_pct,
+       round(avg(x.audio_latency_ms)::numeric) AS audio_latency_ms,
+       bool_or(x.audio_stats) AS audio_stats,
+       (SELECT count(*) FROM events e WHERE e.session_id = s.id AND e.kind = 'audio') AS audio_events
 FROM sessions s
 LEFT JOIN samples x ON x.session_id = s.id
 GROUP BY s.id;

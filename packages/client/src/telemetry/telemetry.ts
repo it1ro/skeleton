@@ -3,10 +3,27 @@ import { fingerprint } from './fingerprint.ts';
 
 declare const __COMMIT__: string;
 
+/** One second of audio health, read from the mixer and the score; null without sound (`?audio=0`). */
+export interface TelemetryAudio {
+  state: AudioContextState | 'off';
+  rate: number;
+  latencyMs: number | null;
+  underrunMs: number | null;
+  underrunEvents: number | null;
+  playedMs: number | null;
+  stats: boolean;
+  rmsDb: number | null;
+  peakDb: number | null;
+  muted: boolean;
+  track: string | null;
+}
+
 export interface TelemetryOptions {
   seed: number;
   backend: string;
   pixelRatio: number;
+  /** Read once per sample; the caller owns the mix, the telemetry only stores what it sees. */
+  audio?: () => TelemetryAudio | null;
 }
 
 /** The latest scene counters, read once per sample. */
@@ -43,6 +60,17 @@ interface Sample {
   z: number | null;
   biome: string | null;
   speed: number | null;
+  audioState: string | null;
+  audioRate: number | null;
+  audioLatencyMs: number | null;
+  audioUnderrunMs: number | null;
+  audioUnderrunEvents: number | null;
+  audioPlayedMs: number | null;
+  audioStats: boolean | null;
+  rmsDb: number | null;
+  peakDb: number | null;
+  audioMuted: boolean | null;
+  musicTrack: string | null;
 }
 
 interface TelemetryEvent {
@@ -74,6 +102,8 @@ function heapMb(): number | null {
  */
 export function startTelemetry(options: TelemetryOptions) {
   if (!new URLSearchParams(location.search).has('telemetry')) return null;
+
+  const audio = options.audio;
 
   const loadMs = Math.round(performance.now() * 10) / 10;
   const session = {
@@ -116,6 +146,7 @@ export function startTelemetry(options: TelemetryOptions) {
       addEvent('hitch', hitch.ms, { kind: hitch.kind, x: scene?.x ?? null, z: scene?.z ?? null });
     }
 
+    const sound = audio?.() ?? null;
     samples.push({
       ts: new Date().toISOString(),
       fps: mean > 0 ? 1000 / mean : 0,
@@ -136,6 +167,17 @@ export function startTelemetry(options: TelemetryOptions) {
       z: scene?.z ?? null,
       biome: scene?.biome ?? null,
       speed: scene?.speed ?? null,
+      audioState: sound?.state ?? null,
+      audioRate: sound?.rate ?? null,
+      audioLatencyMs: sound?.latencyMs ?? null,
+      audioUnderrunMs: sound?.underrunMs ?? null,
+      audioUnderrunEvents: sound?.underrunEvents ?? null,
+      audioPlayedMs: sound?.playedMs ?? null,
+      audioStats: sound?.stats ?? null,
+      rmsDb: sound?.rmsDb ?? null,
+      peakDb: sound?.peakDb ?? null,
+      audioMuted: sound?.muted ?? null,
+      musicTrack: sound?.track ?? null,
     });
     times.length = 0;
   }

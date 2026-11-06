@@ -27,13 +27,17 @@ Grafana — `http://aio:3000` (Tailscale или LAN; admin / `skeleton`), два
   и CPU/RAM в `host_samples`.
 
 Клиент включается только с `?telemetry`: на GitHub Pages и в `?bench` телеметрия выключена, чтобы не портить
-эталон. В секунду пишется кадр (fps, p50/p95/p99/max, рывки, чанки/трава, draw calls, heap, позиция), раз в пять
-секунд — батч POST, на выходе — `sendBeacon`.
+эталон. В секунду пишется кадр (fps, p50/p95/p99/max, рывки, чанки/трава, draw calls, heap, позиция) и звук
+(`AudioContext.playbackStats`: `underrun_ms`, `underrun_events`, `played_ms`; состояние, задержка, RMS/пик,
+mute, трек), раз в пять секунд — батч POST, на выходе — `sendBeacon`. Проблемы звука (смена состояния,
+отказ `resume`, сбой устройства, не декодировался или не стартовал трек) идут в `events` как `kind='audio'`.
 
 ## Таблицы
 
 - `sessions` — сессия, `game`, seed, commit, backend, GPU, viewport, `load_ms` и `first_frame_ms`.
-- `samples` — 1 Гц срезы; hypertable.
+- `samples` — 1 Гц срезы; hypertable. Аудио: `audio_state`, `audio_rate`, `audio_latency_ms`,
+  `audio_underrun_ms`, `audio_underrun_events`, `audio_played_ms`, `audio_stats`, `rms_db`, `peak_db`,
+  `audio_muted`, `music_track`.
 - `events` — рывки, ошибки с `fingerprint`, long tasks, контекст; hypertable.
 - `host_samples` — GPU/CPU/RAM раз в секунду; hypertable.
 - `bench_runs` — история бенчей.
@@ -48,6 +52,7 @@ Grafana — `http://aio:3000` (Tailscale или LAN; admin / `skeleton`), два
 ```bash
 # на aio, из каталога telemetry
 docker compose exec -T db psql -U skeleton -d skeleton < migrations/001-dashboard-fields.sql
+docker compose exec -T db psql -U skeleton -d skeleton < migrations/002-audio.sql
 ```
 
 После правки JSON дашборда Grafana перечитывает `grafana/dashboards` сама (раз в 10 секунд).

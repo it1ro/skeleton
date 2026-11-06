@@ -94,8 +94,11 @@ ON CONFLICT (id) DO UPDATE SET
 
 const SAMPLE_SQL = `
 INSERT INTO samples (session_id, ts, fps, p50, p95, p99, max, frames, hitches, chunks, grass_tiles,
-                     grass_pending, chunk_queue, calls, triangles, heap_mb, x, z, biome, speed)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`;
+                     grass_pending, chunk_queue, calls, triangles, heap_mb, x, z, biome, speed,
+                     audio_state, audio_rate, audio_latency_ms, audio_underrun_ms, audio_underrun_events,
+                     audio_played_ms, audio_stats, rms_db, peak_db, audio_muted, music_track)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+        $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)`;
 
 const EVENT_SQL = `
 INSERT INTO events (session_id, ts, kind, ms, data)
@@ -104,6 +107,17 @@ VALUES ($1,$2,$3,$4,$5::jsonb)`;
 function number(value, fallback = null) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+/** Audio fields are null when the game runs without sound or the browser lacks the API: keep "unknown" unknown. */
+function optional(value) {
+  if (value === null || value === undefined) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function bool(value) {
+  return typeof value === 'boolean' ? value : null;
 }
 
 async function ingest(payload) {
@@ -152,6 +166,17 @@ async function ingest(payload) {
       number(s.z),
       s.biome ?? null,
       number(s.speed),
+      s.audioState ?? null,
+      optional(s.audioRate),
+      optional(s.audioLatencyMs),
+      optional(s.audioUnderrunMs),
+      optional(s.audioUnderrunEvents),
+      optional(s.audioPlayedMs),
+      bool(s.audioStats),
+      optional(s.rmsDb),
+      optional(s.peakDb),
+      bool(s.audioMuted),
+      s.musicTrack ?? null,
     ]);
   }
 
@@ -216,7 +241,8 @@ async function handle(req, res) {
   if (req.method === 'GET' && url.pathname === '/api/sessions') {
     const rows = await pool.query(
       `SELECT id, kind, game, started_at, ended_at, seed, commit, backend, gpu, load_ms, first_frame_ms,
-              samples, fps, p95, max, hitches
+              samples, fps, p95, max, hitches, audio_samples, audio_played_s, audio_underrun_ms,
+              audio_underrun_events, audio_glitch_pct, audio_latency_ms, audio_stats, audio_events
        FROM session_summary ORDER BY started_at DESC LIMIT 50`,
     );
     json(res, 200, rows.rows);
