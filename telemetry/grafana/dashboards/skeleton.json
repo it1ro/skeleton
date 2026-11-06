@@ -313,7 +313,7 @@
         {
           "refId": "A",
           "format": "table",
-          "rawSql": "SELECT s.game, s.started_at, s.commit, s.backend,\n                    round(s.load_ms::numeric, 0) AS load_ms,\n                    round(s.first_frame_ms::numeric, 0) AS first_frame_ms,\n                    s.samples, s.fps, s.p95, s.max, s.hitches,\n                    COALESCE(e.errors, 0) AS errors\n             FROM session_summary s\n             LEFT JOIN (SELECT session_id, count(*) AS errors FROM events\n                        WHERE kind IN ('error','contextlost') GROUP BY session_id) e\n               ON e.session_id = s.id\n             WHERE $__timeFilter(s.started_at)\n             ORDER BY s.started_at DESC LIMIT 50"
+          "rawSql": "SELECT s.game, s.started_at, s.commit, s.backend,\n       round(s.load_ms::numeric, 0) AS load_ms,\n       round(s.first_frame_ms::numeric, 0) AS first_frame_ms,\n       s.samples, s.fps, s.p95, s.max, s.hitches,\n       s.audio_stats, s.audio_played_s, s.audio_underrun_ms, s.audio_underrun_events,\n       s.audio_glitch_pct, s.audio_latency_ms, s.audio_events,\n       COALESCE(e.errors, 0) AS errors\nFROM session_summary s\nLEFT JOIN (SELECT session_id, count(*) AS errors FROM events\n           WHERE kind IN ('error','contextlost') GROUP BY session_id) e\n  ON e.session_id = s.id\nWHERE $__timeFilter(s.started_at)\nORDER BY s.started_at DESC LIMIT 50"
         }
       ],
       "options": {
@@ -402,13 +402,333 @@
       }
     },
     {
+      "id": 112,
+      "type": "row",
+      "title": "Audio",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 18,
+      "type": "stat",
+      "title": "Audio glitch share",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT round((100 * sum(audio_underrun_ms) / nullif(sum(audio_played_ms), 0))::numeric, 2) AS glitch\nFROM samples WHERE $__timeFilter(ts) AND audio_played_ms IS NOT NULL",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.1
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 19,
+      "type": "stat",
+      "title": "Sessions with audio glitches",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 22,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT count(DISTINCT session_id) AS sessions FROM samples\nWHERE $__timeFilter(ts) AND audio_underrun_ms > 0",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 20,
+      "type": "stat",
+      "title": "Audio events",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 22,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT count(*) AS events FROM events WHERE $__timeFilter(ts) AND kind = 'audio'",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 21,
+      "type": "stat",
+      "title": "Sessions without audio stats",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 22,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT count(*) AS sessions FROM sessions s WHERE $__timeFilter(s.started_at)\n  AND NOT EXISTS (SELECT 1 FROM samples x WHERE x.session_id = s.id AND x.audio_stats)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Audio underruns per 5 minutes",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT time_bucket('5 minutes', ts) AS time, sum(audio_underrun_ms) AS underrun_ms,\n       sum(audio_underrun_events) AS events\nFROM samples WHERE $__timeFilter(ts) GROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 6
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean"
+          ]
+        }
+      }
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Audio latency per 5 minutes",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 26,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT time_bucket('5 minutes', ts) AS time, round(avg(audio_latency_ms)::numeric, 1) AS latency_ms\nFROM samples WHERE $__timeFilter(ts) GROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 6
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean"
+          ]
+        }
+      }
+    },
+    {
       "id": 121,
       "type": "row",
       "title": "Telemetry health",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 21,
+        "y": 33,
         "w": 24,
         "h": 1
       },
@@ -424,7 +744,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 22,
+        "y": 34,
         "w": 12,
         "h": 7
       },
@@ -465,7 +785,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 22,
+        "y": 34,
         "w": 6,
         "h": 4
       },
@@ -508,7 +828,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 22,
+        "y": 34,
         "w": 6,
         "h": 4
       },

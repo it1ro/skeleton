@@ -477,13 +477,522 @@
       }
     },
     {
+      "id": 160,
+      "type": "row",
+      "title": "Audio",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 150,
+      "type": "stat",
+      "title": "Glitch share, %",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 39,
+        "w": 5,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT round((100 * sum(audio_underrun_ms) / nullif(sum(audio_played_ms), 0))::numeric, 2) AS glitch\nFROM samples WHERE session_id = '$session'::uuid",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.1
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 151,
+      "type": "stat",
+      "title": "Underrun, ms",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 5,
+        "y": 39,
+        "w": 5,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT round(sum(audio_underrun_ms)::numeric, 0) AS underrun_ms\nFROM samples WHERE session_id = '$session'::uuid",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 500
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 152,
+      "type": "stat",
+      "title": "Underrun events",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 10,
+        "y": 39,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT sum(audio_underrun_events) AS events\nFROM samples WHERE session_id = '$session'::uuid",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 153,
+      "type": "stat",
+      "title": "Latency, ms",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 14,
+        "y": 39,
+        "w": 5,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT round(avg(audio_latency_ms)::numeric, 0) AS latency_ms\nFROM samples WHERE session_id = '$session'::uuid",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 60
+              },
+              {
+                "color": "red",
+                "value": 120
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 154,
+      "type": "stat",
+      "title": "Level, dBFS",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 19,
+        "y": 39,
+        "w": 5,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT round(percentile_cont(0.5) WITHIN GROUP (ORDER BY rms_db)::numeric, 1) AS rms_db\nFROM samples WHERE session_id = '$session'::uuid\n  AND rms_db > -90",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dB"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 155,
+      "type": "timeseries",
+      "title": "Audio underruns per second",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 43,
+        "w": 10,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT ts AS time, audio_underrun_ms, audio_underrun_events\nFROM samples WHERE session_id = '$session'::uuid\nORDER BY ts"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 6
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean"
+          ]
+        }
+      }
+    },
+    {
+      "id": 156,
+      "type": "timeseries",
+      "title": "Audio level, dBFS",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 10,
+        "y": 43,
+        "w": 7,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT ts AS time, rms_db, peak_db\nFROM samples WHERE session_id = '$session'::uuid\nORDER BY ts"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 6
+          },
+          "unit": "dB"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean"
+          ]
+        }
+      }
+    },
+    {
+      "id": 157,
+      "type": "timeseries",
+      "title": "Audio latency, ms",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 17,
+        "y": 43,
+        "w": 7,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT ts AS time, audio_latency_ms, audio_played_ms\nFROM samples WHERE session_id = '$session'::uuid\nORDER BY ts"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 6
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "mean"
+          ]
+        }
+      }
+    },
+    {
+      "id": 158,
+      "type": "state-timeline",
+      "title": "Audio state",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 10,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawSql": "SELECT ts AS time, audio_state\nFROM samples WHERE session_id = '$session'::uuid\n  AND audio_state IS NOT NULL\nORDER BY ts"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "running": {
+                  "color": "green",
+                  "index": 0
+                },
+                "suspended": {
+                  "color": "yellow",
+                  "index": 1
+                },
+                "interrupted": {
+                  "color": "red",
+                  "index": 2
+                },
+                "closed": {
+                  "color": "red",
+                  "index": 3
+                },
+                "off": {
+                  "color": "text",
+                  "index": 4
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "showValue": "auto",
+        "mergeValues": true,
+        "legend": {
+          "showLegend": false
+        }
+      }
+    },
+    {
+      "id": 159,
+      "type": "table",
+      "title": "Audio events",
+      "datasource": {
+        "type": "postgres",
+        "uid": "skeleton-db"
+      },
+      "gridPos": {
+        "x": 10,
+        "y": 51,
+        "w": 14,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT ts AS time, COALESCE(data->>'subtype', '') AS subtype, data\nFROM events\nWHERE session_id = '$session'::uuid AND kind = 'audio'\nORDER BY ts DESC LIMIT 200"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
       "id": 138,
       "type": "row",
       "title": "Errors in this session",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 38,
+        "y": 57,
         "w": 24,
         "h": 1
       },
@@ -499,7 +1008,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 39,
+        "y": 58,
         "w": 24,
         "h": 8
       },

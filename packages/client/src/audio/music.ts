@@ -172,7 +172,10 @@ export class Music {
     this.unlocked = true;
 
     // Decode the bed while the world loads; the first fade starts as soon as the buffer is ready.
-    void this.load('pogost').catch((error: unknown) => console.warn('music: "pogost" failed to decode', error));
+    void this.load('pogost').catch((error: unknown) => {
+      this.fail('decode', 'pogost', error);
+      console.warn('music: "pogost" failed to decode', error);
+    });
   }
 
   /** The track the score should use now; `null` fades the score out. Safe to call every frame. */
@@ -258,8 +261,20 @@ export class Music {
   prefetch(tracks: readonly MusicCue[] = MUSIC_CUES): void {
     for (const track of tracks) {
       if (this.buffers.has(track) || this.failed.has(track) || this.pending === track) continue;
-      void this.load(track).catch((error: unknown) => console.warn(`music: "${track}" failed to decode`, error));
+      void this.load(track).catch((error: unknown) => {
+        this.fail('decode', track, error);
+        console.warn(`music: "${track}" failed to decode`, error);
+      });
     }
+  }
+
+  /** A missing or broken track is a sound problem the player hears; the telemetry keeps it. */
+  private fail(subtype: 'decode' | 'start', track: MusicCue, error: unknown): void {
+    this.mixer.issues.push({
+      subtype,
+      track,
+      message: error instanceof Error ? error.message : String(error),
+    });
   }
 
   private async load(track: MusicCue): Promise<AudioBuffer> {
@@ -304,6 +319,7 @@ export class Music {
     try {
       buffer = await this.load(track);
     } catch (error) {
+      this.fail('decode', track, error);
       console.warn(`music: "${track}" is not playable`, error);
       if (this.pending === track) this.pending = null;
       return;
@@ -336,6 +352,7 @@ export class Music {
     try {
       source.start(now);
     } catch (error) {
+      this.fail('start', track, error);
       console.warn(`music: "${track}" failed to start`, error);
       return;
     }

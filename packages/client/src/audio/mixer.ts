@@ -18,6 +18,8 @@ import {
   type AudioBus,
   type AudioLevels,
 } from './levels.ts';
+import { IssueLog } from './issues.ts';
+import { AudioStats, OFF_PULSE, type AudioPulse } from './stats.ts';
 
 export type LevelsPatch = Partial<Record<keyof AudioLevels, unknown>>;
 
@@ -29,12 +31,16 @@ export interface AudioDebug {
 }
 
 export class Mixer {
+  /** Audio failures and state changes; `main.ts` points it at the telemetry once the world loads. */
+  readonly issues = new IssueLog();
   private context: AudioContext | null = null;
   private master: GainNode | null = null;
   private analyser: AnalyserNode | null = null;
   private buses: Record<AudioBus, GainNode> | null = null;
+  private stats: AudioStats | null = null;
   private levels: AudioLevels;
   private resumeOnGesture: (() => void) | null = null;
+  private lastState: AudioContextState | null = null;
 
   constructor(levels: AudioLevels = loadLevels()) {
     this.levels = levels;
@@ -55,8 +61,19 @@ export class Mixer {
     if (!this.context) this.create();
     const context = this.context;
     if (!context) return;
-    void context.resume().catch(() => {});
+    void context.resume().catch((error: unknown) => {
+      this.issues.push({ subtype: 'resume', message: messageOf(error), state: context.state });
+    });
     if (context.state !== 'running') this.armGesture();
+  }
+
+  /**
+   * One second of audio health for the telemetry: context state, device latency, playback statistics
+   * and the master RMS, plus the mute flag that explains a silent but healthy mix.
+   */
+  pulse(): AudioPulse & { muted: boolean } {
+    const pulse = this.stats ? this.stats.read() : OFF_PULSE;
+    return { ...pulse, muted: this.levels.muted };
   }
 
   bus(name: AudioBus): GainNode | null {
@@ -100,7 +117,10 @@ export class Mixer {
   private create(): void {
     const global = globalThis as typeof globalThis & { webkitAudioContext?: typeof AudioContext };
     const Ctor = global.AudioContext ?? global.webkitAudioContext;
-    if (!Ctor) return;
+    if (!Ctor) {
+      this.issues.push({ subtype: 'unsupported', message: 'no Web Audio' });
+      return;
+    }
     try {
       const context = new Ctor();
       const master = context.createGain();
@@ -118,10 +138,28 @@ export class Mixer {
       this.master = master;
       this.analyser = analyser;
       this.buses = buses;
+      this.stats = new AudioStats(context, analyser);
+      this.watch(context);
       this.apply(true);
-    } catch {
+    } catch (error) {
       // No Web Audio (old browser, private mode): the game stays silent.
+      this.issues.push({ subtype: 'unsupported', message: messageOf(error) });
     }
+  }
+
+  /** Device errors and context state changes are the two ways sound breaks without an exception. */
+  private watch(context: AudioContext): void {
+    this.lastState = context.state;
+    context.addEventListener('statechange', () => {
+      const from = this.lastState;
+      this.lastState = context.state;
+      if (from === context.state) return;
+      this.issues.push({ subtype: 'state', from, to: context.state, hidden: document.hidden });
+    });
+    context.addEventListener('error', (event) => {
+      const message = event instanceof ErrorEvent && event.message ? event.message : 'audio device error';
+      this.issues.push({ subtype: 'error', message, state: context.state });
+    });
   }
 
   private apply(immediate = false): void {
@@ -149,7 +187,9 @@ export class Mixer {
         .then(() => {
           if (context.state === 'running') this.disarmGesture();
         })
-        .catch(() => {});
+        .catch((error: unknown) => {
+          this.issues.push({ subtype: 'resume', message: messageOf(error), state: context.state });
+        });
     };
     this.resumeOnGesture = resume;
     window.addEventListener('pointerdown', resume);
@@ -168,7 +208,18 @@ export class Mixer {
   private readonly onVisibility = (): void => {
     const context = this.context;
     if (!context) return;
-    if (document.hidden) void context.suspend().catch(() => {});
-    else void context.resume().catch(() => {});
+    if (document.hidden) {
+      void context.suspend().catch((error: unknown) => {
+        this.issues.push({ subtype: 'suspend', message: messageOf(error), state: context.state });
+      });
+    } else {
+      void context.resume().catch((error: unknown) => {
+        this.issues.push({ subtype: 'resume', message: messageOf(error), state: context.state });
+      });
+    }
   };
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
