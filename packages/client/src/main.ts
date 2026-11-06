@@ -94,7 +94,8 @@ const bench =
           benchSceneParam === 'water' ||
           benchSceneParam === 'shore' ||
           benchSceneParam === 'surf' ||
-          benchSceneParam === 'sky'
+          benchSceneParam === 'sky' ||
+          benchSceneParam === 'sun'
             ? benchSceneParam
             : 'spawn',
       });
@@ -491,10 +492,12 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
     } else {
       orbit.update(input, pos.x, pos.y, pos.z);
     }
-    bench?.placeCamera(pos);
-    chunks.update(pos.x, pos.z);
-    grass.update(pos.x, pos.z);
-    env.update(serverTick, pos.x, pos.y, pos.z, viewBiome);
+    bench?.placeCamera(pos, env.body);
+    // A bench camera can stand far from the player: stream and snap the world around the view, not the body.
+    const focus = bench ? bench.focus : pos;
+    chunks.update(focus.x, focus.z);
+    grass.update(focus.x, focus.z);
+    env.update(serverTick, focus.x, focus.y, focus.z, viewBiome, camera.position);
     remotes.update(serverTick, dt, camera, window.innerWidth, window.innerHeight);
     me.updateLabel(camera, window.innerWidth, window.innerHeight);
     povituha.updateLabel(camera, window.innerWidth, window.innerHeight);

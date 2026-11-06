@@ -5,8 +5,8 @@ import type { ChunkManager } from '../world/chunks.ts';
 import { frameStats, type FrameStats } from './stats.ts';
 import { takeHitches, type Hitch } from './hitches.ts';
 
-/** Where the fixed camera looks: the spawn meadow, a tree, open water, the surf line, or the sky. */
-export type BenchSceneKind = 'spawn' | 'trees' | 'water' | 'shore' | 'surf' | 'sky';
+/** Where the fixed camera looks: the spawn meadow, a tree, open water, the surf line, the sky, or the sun. */
+export type BenchSceneKind = 'spawn' | 'trees' | 'water' | 'shore' | 'surf' | 'sky' | 'sun';
 
 export interface BenchOptions {
   seconds?: number;
@@ -97,6 +97,11 @@ function findTree(terrain: Terrain): { x: number; y: number; z: number } | null 
 
 /** First open-ocean cell along +x: the island is finite, so this always finds water. */
 function findOcean(terrain: Terrain): { x: number; z: number } {
+  // Deep water, not the first puddle past the waterline: the `water` scene is the open-sea glint, and a
+  // 0.5 m shelf under the camera turns it into a shallow sand film.
+  for (let d = 64; d < 8192; d += 16) {
+    if (terrain.heightAt(d, 0) < WATER_LEVEL - 4) return { x: d, z: 0 };
+  }
   for (let d = 64; d < 8192; d += 16) {
     if (terrain.heightAt(d, 0) < WATER_LEVEL - 0.5) return { x: d, z: 0 };
   }
@@ -228,8 +233,11 @@ export function createBench(options: BenchOptions = {}) {
     console.info('[bench]', result);
   }
 
-  /** Positions the camera for the current frame for `water` and `sky`; `spawn` goes through the orbit. */
-  function placeCameraImpl(pos: { x: number; y: number; z: number }): void {
+  /** Positions the camera for the current frame for every fixed scene; `spawn` goes through the orbit. */
+  function placeCameraImpl(
+    pos: { x: number; y: number; z: number },
+    body: { x: number; y: number; z: number } = { x: 1, y: 0, z: 0 },
+  ): void {
     if (!target || scene === 'spawn') return;
     if (scene === 'trees') {
       if (!treeSearched) {
@@ -252,6 +260,20 @@ export function createBench(options: BenchOptions = {}) {
       const cam = target.view.camera;
       cam.position.set(pos.x, pos.y + 1.6, pos.z);
       cam.lookAt(pos.x, pos.y + 500, pos.z);
+      return;
+    }
+    if (scene === 'sun') {
+      // Stand at the waterline and look along the visible body's azimuth: the disc, the glint path and the
+      // near water in one frame. The body is high at noon, so the aim stays level and keeps the sea in view.
+      if (!shore) shore = findShore(target.terrain);
+      const cam = target.view.camera;
+      const px = shore.x - shore.nx * 1.5;
+      const pz = shore.z - shore.nz * 1.5;
+      const len = Math.hypot(body.x, body.z) || 1;
+      const bx = body.x / len;
+      const bz = body.z / len;
+      cam.position.set(px, target.terrain.heightAt(px, pz) + 1.6, pz);
+      cam.lookAt(px + bx * 200, cam.position.y + 0.4, pz + bz * 200);
       return;
     }
     if (scene === 'shore' || scene === 'surf') {
@@ -309,8 +331,16 @@ export function createBench(options: BenchOptions = {}) {
     },
 
     /** Positions the camera for the current frame; call before `renderer.render`. */
-    placeCamera(pos: { x: number; y: number; z: number }): void {
-      placeCameraImpl(pos);
+    placeCamera(pos: { x: number; y: number; z: number }, body?: { x: number; y: number; z: number }): void {
+      placeCameraImpl(pos, body);
+    },
+
+    /**
+     * What the world streams and snaps around: the fixed camera, not the stationary player. A bench camera
+     * can stand hundreds of meters from the player; the water plane and the sun must follow the view.
+     */
+    get focus(): { x: number; y: number; z: number } {
+      return target ? target.view.camera.position : { x: 0, y: 0, z: 0 };
     },
 
     /** Called every frame after the render, with the frame's render cost and draw stats. */

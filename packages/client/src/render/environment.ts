@@ -12,6 +12,7 @@ import {
   Sprite,
   SpriteMaterial,
   SRGBColorSpace,
+  Vector3,
   type Scene,
 } from 'three/webgpu';
 import type { Node } from 'three/webgpu';
@@ -54,6 +55,8 @@ const VISION_DIM = 0.75;
 const DISC_DISTANCE = 850;
 const DISC_SIZE_SUN = 80;
 const DISC_SIZE_MOON = 55;
+/** The sun path leans to +z: 0.4 × 150 = the old 60 m light offset; the glint uses the same lean. */
+const SUN_TILT = 0.4;
 /** Subtle final S-curve contrast (0 = off). */
 const CURVE_CONTRAST = 0.2;
 /** How much the night grade darkens the final image (0 = off, 1 = fully dark). */
@@ -118,6 +121,8 @@ export class Environment {
   /** Saturated zenith color of the gradient, from the time of day before `visionState` fades it. */
   private readonly zenith = ZENITH_DAY.clone();
   private readonly zenithBase = ZENITH_DAY.clone();
+  /** Direction to the visible body (sun by day, moon by night), unit: the disc and the glint follow it. */
+  readonly body = new Vector3(0, 1, 0);
   /** The sea: its own module (`render/water.ts`), fed the sky color and the sun here. */
   readonly water: Water;
   private readonly disc: Sprite;
@@ -178,7 +183,7 @@ export class Environment {
 
   constructor(scene: Scene, heightAt: (x: number, z: number) => number = () => WATER_LEVEL) {
     this.heightAt = heightAt;
-    this.water = new Water(scene, this.skyBase, this.zenithBase);
+    this.water = new Water(scene, this.skyBase, this.zenithBase, this.fog.color);
     // Sky gradient: horizon matches the fog color so there is no seam where the two meet. Both are fed the
     // same raw color values and go through the same tone mapping, so they stay in lock-step.
     const horizon = uniform(this.sky);
@@ -256,7 +261,14 @@ export class Environment {
     this.sun.shadow.mapSize.set(settings.mapSize, settings.mapSize);
   }
 
-  update(serverTick: number, focusX: number, focusY: number, focusZ: number, biome: Biome): void {
+  update(
+    serverTick: number,
+    focusX: number,
+    focusY: number,
+    focusZ: number,
+    biome: Biome,
+    eye?: { x: number; y: number; z: number },
+  ): void {
     this.timeOfDay = (START_TIME + this.timeOffset + (serverTick * TICK_DT) / DAY_LENGTH) % 1;
     const angle = (this.timeOfDay - 0.25) * Math.PI * 2; // 0 at sunrise
     const height = Math.sin(angle); // -1..1
@@ -268,7 +280,9 @@ export class Environment {
     // Light follows the sun by day and the moon by night, so there is always one shadow caster.
     const dirX = Math.cos(angle);
     const dirY = Math.max(0.15, Math.abs(height));
-    this.sun.position.set(focusX + dirX * 150, focusY + dirY * 150, focusZ + 60);
+    // One vector for the light and the glint (this is the old z + 60: 150 × 0.4). The light keeps its y clamp
+    // so shadows never degenerate; the visible body below uses the true elevation.
+    this.sun.position.set(focusX + dirX * 150, focusY + dirY * 150, focusZ + SUN_TILT * 150);
     this.sun.target.position.set(focusX, focusY, focusZ);
     this.sun.color.copy(MOON).lerp(SUN_DUSK, day).lerp(SUN_DAY, day * (1 - dusk));
     applyVision(this.sun.color, vision);
@@ -300,14 +314,28 @@ export class Environment {
     this.zenith.multiplyScalar(dim);
 
     // The water reads the raw sky and the sun; `visionState` reaches it through the global output node.
-    this.water.update(focusX, focusZ, dirX, dirY, day);
+    // Visible body: by day the same direction as the light (z lean included), by night the moon on its old
+    // opposite path — it must not jump sides at sunset. The disc and the water glint read only this vector.
+    const sunElev = Math.sin(angle);
+    if (sunElev >= 0) {
+      this.body.set(dirX, sunElev, SUN_TILT).normalize();
+    } else {
+      this.body.set(-Math.cos(angle), -sunElev, 0).normalize();
+    }
+    this.water.update(focusX, focusZ, this.body, day, this.fog.near, this.fog.far);
 
     // Sun/moon disc: the visible body is above the horizon; the sun by day, the moon by night.
-    const sunElev = Math.sin(angle);
-    const discElev = Math.abs(sunElev);
-    const discAz = sunElev >= 0 ? Math.cos(angle) : -Math.cos(angle);
-    const discFade = smooth(0.0, 0.12, discElev);
-    this.disc.position.set(focusX + discAz * DISC_DISTANCE, focusY + discElev * DISC_DISTANCE, focusZ);
+    const discFade = smooth(0.0, 0.12, Math.abs(sunElev));
+    // The disc is a sky body at infinity: place it around the camera, not the player, so a bench camera far
+    // from the player still sees it in the true direction.
+    const eyeX = eye?.x ?? focusX;
+    const eyeY = eye?.y ?? focusY;
+    const eyeZ = eye?.z ?? focusZ;
+    this.disc.position.set(
+      eyeX + this.body.x * DISC_DISTANCE,
+      eyeY + this.body.y * DISC_DISTANCE,
+      eyeZ + this.body.z * DISC_DISTANCE,
+    );
     const discSize = DISC_SIZE_MOON + (DISC_SIZE_SUN - DISC_SIZE_MOON) * day;
     this.disc.scale.set(discSize, discSize, 1);
     this.disc.material.color.copy(MOON).lerp(SUN_DUSK, day).lerp(SUN_DAY, day * (1 - dusk));

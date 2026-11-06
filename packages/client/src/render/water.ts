@@ -32,6 +32,7 @@ import {
   normalize,
   oneMinus,
   positionGeometry,
+  positionView,
   positionWorld,
   pow,
   reflect,
@@ -58,9 +59,16 @@ const RIPPLE_SCALE = 0.9; // 1/m
 const RIPPLE_SPEED = 0.15; // 1/s
 /** Fresnel and sun glint: a sharp core plus a wide halo, so the sun lays a path, not a dot. */
 const FRESNEL_POWER = 3;
-const SPECULAR_SHARP = 140;
-const SPECULAR_WIDE = 18;
-const SPECULAR_STRENGTH = 1.1;
+const SPECULAR_SHARP = 420;
+const SPECULAR_WIDE = 70;
+const SPECULAR_STRENGTH = 1.3;
+/** The glint sees a rougher sea than the fresnel: the same slope tilted more, so a low sun lays a path. */
+const GLINT_ROUGHNESS = 2.2;
+/** Night glint: cold and weak, only under a moon that is above the horizon. */
+const MOON_GLINT = 0.22;
+/** The water's own fog repeats the scene's smoothstep and turns its last pixels into a horizon line. */
+const HORIZON_START = 0.9;
+const HORIZON_DARK = 0.12;
 /** Detail fades out with distance: a 0.8 m ripple at 200 m is sub-pixel and would shimmer. */
 const DETAIL_FADE_NEAR = 120;
 const DETAIL_FADE_FAR = 260;
@@ -82,13 +90,17 @@ const WATER_SHALLOW_LIVE = new Color(0x5aa79a);
 /** Depth at which the body color is fully "deep", meters. */
 const WATER_SHORE_DEPTH = 6;
 /** Alpha at the water's edge: thin water over sand, so the wet bottom shows through. */
-const WATER_MIN_OPACITY = 0.55;
+const WATER_MIN_OPACITY = 0.62;
 /** Depth at which the body reaches its full opacity, meters: the first metres are clear, then water wins. */
 const WATER_CLEAR_DEPTH = 0.35;
-/** Surf: foam colour, the swash period and the deepest water the foam band reaches. */
+/** Surf: foam colour, the swash period and the band width along the shore, meters. */
 const FOAM_COLOR = new Color(0xd9dbd0);
 const SURF_SPEED = 0.9; // rad/s → ~7 s per wave set
-const SURF_DEPTH = 0.28; // m
+const FOAM_WIDTH_MIN = 1.5;
+const FOAM_WIDTH_MAX = 4.0;
+/** Breakers: the band sits this many meters off the waterline, at any bottom slope. */
+const BREAK_NEAR = 3.0;
+const BREAK_FAR = 8.0;
 /** Foam fades with distance: a 1 m band at 200 m is sub-pixel and would shimmer. */
 const FOAM_FADE_NEAR = 60;
 const FOAM_FADE_FAR = 160;
@@ -130,8 +142,15 @@ export class Water {
   private readonly qualityUniform = uniform(WATER_DEFAULT_QUALITY);
   private readonly skyUniform = uniform(new Color(0xffffff));
   private readonly zenithUniform = uniform(new Color(0xffffff));
-  private readonly sunDirectionUniform = uniform(new Vector3(0, 1, 0));
+  /** Direction to the visible body: the sun by day, the moon by night. Disc and glint share it. */
+  private readonly bodyDirectionUniform = uniform(new Vector3(0, 1, 0));
+  /** The body's height above the water, 0..1: gates the weak lunar glint. */
+  private readonly bodyElevationUniform = uniform(0);
   private readonly dayUniform = uniform(1);
+  /** Scene fog, mirrored in this material: the water gets a horizon line instead of melting into the sky. */
+  private readonly fogColorUniform = uniform(new Color(0xffffff));
+  private readonly fogNearUniform = uniform(60);
+  private readonly fogFarUniform = uniform(380);
   /** Depth of the sea under the surface, in meters (`WATER_LEVEL - height`), baked from the terrain. */
   private readonly depthTexture: DataTexture;
   /** 1 turns the water into a depth map for checking the field; 0 in normal play. */
@@ -139,12 +158,15 @@ export class Water {
   private qualityValue = WATER_DEFAULT_QUALITY;
 
   /**
-   * @param sky the horizon colour the fresnel reflects, @param zenith the top of the sky. The environment
-   * mutates both in place every frame, so the sea's reflection follows the time of day for free.
+   * @param sky the horizon colour the fresnel reflects, @param zenith the top of the sky, @param fogColor the
+   * scene fog colour. The environment mutates all three in place every frame, so the sea follows for free.
    */
-  constructor(scene: Scene, sky: Color, zenith: Color) {
+  constructor(scene: Scene, sky: Color, zenith: Color, fogColor: Color) {
     this.skyUniform.value = sky;
     this.zenithUniform.value = zenith;
+    this.fogColorUniform.value = fogColor;
+    // The scene fog would wash the water into the sky at 380 m; the material does its own, with a horizon line.
+    this.material.fog = false;
     // Deep by default: until the worker's field arrives the whole sea reads as deep water, not as a shore.
     const deep = new Uint16Array(WATER_FIELD_SIZE * WATER_FIELD_SIZE).fill(toHalf(WATER_FIELD_DEEP));
     this.depthTexture = new DataTexture(deep, WATER_FIELD_SIZE, WATER_FIELD_SIZE, RedFormat, HalfFloatType);
@@ -183,10 +205,23 @@ export class Water {
     this.debugUniform.value = mode;
   }
 
-  /** Sun direction (unit-ish, z fixed) and the 0..1 day factor; the plane is snapped to the focus point. */
-  update(focusX: number, focusZ: number, sunX: number, sunY: number, day: number): void {
-    this.sunDirectionUniform.value.set(sunX, sunY, 0.4).normalize();
+  /**
+   * Visible body direction (unit, sun by day / moon by night), the 0..1 day factor, the scene fog range and the
+   * focus point the plane snaps to. One vector feeds both the disc (environment) and the glint.
+   */
+  update(
+    focusX: number,
+    focusZ: number,
+    body: Vector3,
+    day: number,
+    fogNear: number,
+    fogFar: number,
+  ): void {
+    this.bodyDirectionUniform.value.copy(body);
+    this.bodyElevationUniform.value = Math.max(0, body.y);
     this.dayUniform.value = day;
+    this.fogNearUniform.value = fogNear;
+    this.fogFarUniform.value = fogFar;
     this.mesh.position.x = Math.round(focusX / WATER_SNAP) * WATER_SNAP;
     this.mesh.position.z = Math.round(focusZ / WATER_SNAP) * WATER_SNAP;
   }
@@ -200,6 +235,17 @@ export class Water {
       .mul(step(uv.y, 1.0));
     const sampled = texture(this.depthTexture, uv.clamp(0.0, 1.0)).r;
     return mix(WATER_FIELD_DEEP, sampled, inside);
+  }
+
+  /**
+   * Depth gradient ∇d (m/m) from four field taps at half a texel. Two diagonal taps would only see the
+   * derivative along one diagonal; a shore perpendicular to it would read as flat. Four taps stay cheap.
+   */
+  private depthGradient(wxz: Node<'vec2'>) {
+    const e = 0.75;
+    const dx = this.depthNode(wxz.add(vec2(e, 0.0))).sub(this.depthNode(wxz.sub(vec2(e, 0.0))));
+    const dz = this.depthNode(wxz.add(vec2(0.0, e))).sub(this.depthNode(wxz.sub(vec2(0.0, e))));
+    return vec2(dx, dz).mul(1 / (2 * e));
   }
 
   /**
@@ -242,21 +288,32 @@ export class Water {
     const shadeAmp = this.surfaceAmp();
     const light = this.dayUniform.mul(WATER_DAY_GAIN).add(WATER_AMBIENT);
 
-    // Surf: the foam edge follows the instantaneous waterline; the swash breathes it in and out, noise
-    // tears the outer edge, and the band fades with distance instead of shimmering.
+    // Surf: the foam band is a width along the shore (1.5–4 m), not a depth. A depth threshold stretches on a
+    // flat shelf into a snow field; the field's gradient converts meters on the shore into meters of depth.
     const along = mx_noise_float(worldPos.xz.mul(0.035)).mul(0.5).add(0.5);
     const phase = time.mul(SURF_SPEED).add(along.mul(6.283185));
-    const edge = sin(phase).mul(0.45).add(0.55).mul(SURF_DEPTH);
+    const swash = sin(phase).mul(0.5).add(0.5);
+    const width = mix(FOAM_WIDTH_MIN, FOAM_WIDTH_MAX, swash);
+    const gradient = this.depthGradient(worldPos.xz);
+    // The floor only guards a perfectly flat bed; the width stays in meters even when the slope is tiny.
+    const slopeLen = max(length(gradient), 0.005);
+    const threshold = width.mul(slopeLen).clamp(0.01, 0.5);
     const ragged = mx_noise_float(worldPos.xz.mul(0.9).add(vec2(time.mul(0.04), time.mul(-0.025))));
     // Breakup: real foam is torn into streaks and patches, not a solid white sheet.
     const streak = mx_noise_float(worldPos.xz.mul(0.55).add(vec2(time.mul(0.03), time.mul(-0.02)))).mul(0.5).add(0.5);
     const foamFade = oneMinus(smoothstep(FOAM_FADE_NEAR, FOAM_FADE_FAR, length(cameraPosition.sub(worldPos))));
-    // Edge foam at the waterline, plus a breaker band where the sea is about a metre deep: waves break
-    // there, and the white line is what reads as surf from a distance.
-    const surf = oneMinus(smoothstep(edge.mul(0.35), edge, waterDepth.add(ragged.mul(0.1))));
+    // Edge foam at the waterline; the ragged edge moves along the shore in meters, so it tears the same on a
+    // gentle shelf. Breakers sit a fixed distance off the waterline instead of at a fixed depth.
+    const raggedDepth = ragged.mul(width).mul(slopeLen).mul(0.6);
+    const surf = oneMinus(smoothstep(threshold.mul(0.35), threshold, waterDepth.add(raggedDepth)));
     const crest = smoothstep(0.55, 0.9, field.x.mul(0.5).add(0.5));
-    const breakBand = smoothstep(0.35, 0.9, depth).mul(smoothstep(2.4, 1.4, depth));
-    const breaking = breakBand.mul(crest).mul(0.35);
+    const breakNear = slopeLen.mul(BREAK_NEAR);
+    const breakFar = slopeLen.mul(BREAK_FAR);
+    const breakBand = smoothstep(breakNear, breakNear.mul(1.35), depth).mul(
+      smoothstep(breakFar, breakFar.mul(0.8), depth),
+    );
+    // Waves do not break on a flat sandbar: without this gate a 0.02 shelf gets a 20–100 m white sheet.
+    const breaking = breakBand.mul(crest).mul(0.35).mul(smoothstep(0.05, 0.1, slopeLen));
     // Whitecaps: a steep crest in open water tears white. Sparse by design — a sea of foam reads fake.
     const steep = smoothstep(0.14, 0.24, length(vec2(field.y, field.z)).mul(shadeAmp));
     const whitecap = steep.mul(crest).mul(smoothstep(2.0, 4.0, depth)).mul(0.3);
@@ -320,20 +377,48 @@ export class Water {
         smoothstep(0.0, WATER_SHORE_DEPTH, depth),
       );
 
-      const ref = reflect(this.sunDirectionUniform.negate(), normal);
+      // The glint looks at a rougher sea than the fresnel: tilting the same slope gives the sun facets to catch
+      // at a 1.2 m eye, where the mirror image itself is below the frame.
+      // The swell gives the path its direction; the extra high-frequency chop gives it sparkle instead of a film.
+      const glintSlope = slope.add(rippleSlope.mul(GLINT_ROUGHNESS));
+      const glintNormal = normalize(vec3(glintSlope.x.negate(), 1.0, glintSlope.y.negate()));
+      const ref = reflect(this.bodyDirectionUniform.negate(), glintNormal);
       const sunDot = max(dot(ref, eyeDir), 0.0);
       const glint = pow(sunDot, SPECULAR_SHARP).mul(2.6).add(pow(sunDot, SPECULAR_WIDE).mul(0.6));
       const glintFade = oneMinus(smoothstep(GLINT_FADE_NEAR, GLINT_FADE_FAR, cameraDistance));
-      const spec = glint.mul(SPECULAR_STRENGTH).mul(this.dayUniform).mul(glintFade).mul(oneMinus(foam));
+      const sunSpec = glint
+        .mul(SPECULAR_STRENGTH)
+        .mul(this.dayUniform)
+        .mul(glintFade)
+        .mul(oneMinus(foam))
+        .mul(vec3(1.0, 0.95, 0.86));
+      // The moon gets its own cold, weak specular under the same vector; the sun term is zero at night.
+      const moonFade = oneMinus(smoothstep(0.05, 0.25, this.dayUniform)).mul(
+        smoothstep(0.02, 0.12, this.bodyElevationUniform),
+      );
+      const moonSpec = glint
+        .mul(MOON_GLINT)
+        .mul(moonFade)
+        .mul(glintFade)
+        .mul(oneMinus(foam))
+        .mul(vec3(0.55, 0.68, 0.95));
+      const spec = sunSpec.add(moonSpec);
 
       const waterColor = body
         .mul(light)
         .add(skyColor.mul(fresnel))
-        .add(vec3(spec));
+        .add(spec);
       // A darker line right at the waterline: the eye needs a hard boundary between water and wet sand.
       const edgeLine = oneMinus(smoothstep(0.0, 0.07, waterDepth)).mul(0.5);
       const shaded = mix(waterColor, waterColor.mul(0.55), edgeLine);
       const color = mix(shaded, foamUniform.mul(light), foam);
+
+      // Own fog: the same smoothstep as the scene (near/far follow the biome), then a 12 % darker rim at the
+      // very horizon. The sea keeps a line against the sky instead of melting into it; the shore seam stays.
+      const viewDepth = positionView.z.negate();
+      const fog = smoothstep(this.fogNearUniform, this.fogFarUniform, viewDepth);
+      const horizon = smoothstep(HORIZON_START, 1.0, fog).mul(HORIZON_DARK);
+      const fogged = mix(color, this.fogColorUniform, fog).mul(oneMinus(horizon));
 
       // Depth debug: red is land, white shallow, dark blue deep, with a contour line every 2 m of depth.
       // Off (0) in normal play.
@@ -344,17 +429,20 @@ export class Water {
       const debugColor = mix(vec3(0.8, 0.15, 0.1), ramp, step(0.0, depth));
       const depthMode = step(0.5, this.debugUniform).mul(step(this.debugUniform, 1.5));
       const foamMode = step(1.5, this.debugUniform);
-      const depthView = mix(color, debugColor, depthMode);
+      const depthView = mix(fogged, debugColor, depthMode);
       return mix(depthView, vec3(foam, foam.mul(0.15), foam.mul(0.1)), foamMode);
     })();
 
     // Alpha by instantaneous depth: thin and clear at the edge, the body's opacity by 6 m, foam is opaque.
+    // Far water turns opaque as it fogs, so the horizon rim keeps its contrast over the sky behind it.
     const bodyAlpha = mix(WATER_OPACITY_DEAD, WATER_OPACITY_LIVE, this.qualityUniform);
     const alpha = mix(
       mix(WATER_MIN_OPACITY, bodyAlpha, smoothstep(0.0, WATER_CLEAR_DEPTH, waterDepth)),
       1.0,
       foam,
     );
-    this.material.opacityNode = mix(alpha, 1.0, this.debugUniform);
+    const fog = smoothstep(this.fogNearUniform, this.fogFarUniform, positionView.z.negate());
+    const horizonAlpha = mix(alpha, 1.0, smoothstep(0.75, 1.0, fog));
+    this.material.opacityNode = mix(horizonAlpha, 1.0, this.debugUniform);
   }
 }
