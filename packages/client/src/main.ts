@@ -14,6 +14,7 @@ import { PovituhaFigure } from './npc/figure.ts';
 import { Neodobudka } from './npc/neodobudka.ts';
 import { TalkPanel } from './npc/panel.ts';
 import { createBench } from './bench/bench.ts';
+import { loadWaterField } from './render/water-field-source.ts';
 import { startTelemetry } from './telemetry/telemetry.ts';
 import { Mixer, type AudioDebug, type LevelsPatch } from './audio/mixer.ts';
 import { startWind } from './audio/wind.ts';
@@ -208,7 +209,8 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
   if (pixelsParam === '1') view.setPixels(true);
   else if (pixelsParam === '0') view.setPixels(false);
 
-  const env = new Environment(scene);
+  // The low fog hugs the ground, so it needs the world height field, not eye level.
+  const env = new Environment(scene, (x, z) => terrain.heightAt(x, z));
   view.setOutputNode(env.outputNode);
   // `?time=10` (hours, 0..24) starts the shared clock at that hour: screenshots and benches at daylight
   // instead of waiting for the pre-dawn start to roll around.
@@ -228,6 +230,13 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
     env.waterQuality = quality;
     return env.waterQuality;
   };
+  // `?waterdebug=1` paints the baked depth field instead of the sea: red land, green shallow, blue deep.
+  const waterDebug = Number(params.get('waterdebug'));
+  if (Number.isFinite(waterDebug) && waterDebug > 0) env.water.debugDepth = waterDebug;
+  // The depth field is baked off-thread; until it lands the sea stays deep and flat, the first frame is never blocked.
+  void loadWaterField(seed).then((field) => {
+    if (field) env.water.setDepthField(field.data);
+  });
   // `?shadow=0.5` sets the shadow quality axis (0 — cheapest 512² over ±40 m, 1 — 2048² over ±70 m); `__shadow(q)` live.
   const shadowParam = Number(params.get('shadow'));
   if (params.has('shadow') && Number.isFinite(shadowParam)) env.shadowQuality = shadowParam;
@@ -359,7 +368,9 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
     bench?.placeCamera(pos);
     chunks.update(pos.x, pos.z);
     grass.update(pos.x, pos.z);
-    env.update(serverTick, pos.x, pos.y, pos.z, terrain.biomeAt(pos.x, pos.z));
+    // Fog is about the view, not the avatar: from the beach the sea must not drown in meadow fog.
+    const viewBiome = terrain.biomeAt(camera.position.x, camera.position.z);
+    env.update(serverTick, pos.x, pos.y, pos.z, viewBiome);
     remotes.update(serverTick, dt, camera, window.innerWidth, window.innerHeight);
     me.updateLabel(camera, window.innerWidth, window.innerHeight);
     povituha.updateLabel(camera, window.innerWidth, window.innerHeight);

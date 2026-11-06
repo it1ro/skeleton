@@ -8,43 +8,26 @@ import {
   HemisphereLight,
   Mesh,
   MeshBasicMaterial,
-  NodeMaterial,
   PlaneGeometry,
   Sprite,
   SpriteMaterial,
   SRGBColorSpace,
-  Vector3,
   type Scene,
 } from 'three/webgpu';
 import type { Node } from 'three/webgpu';
 import { BIOMES, DAY_LENGTH, TICK_DT, WATER_LEVEL, type Biome } from '@skeleton/shared';
 import { applyVision, clampVision } from './vision.ts';
 import { DEFAULT_SHADOW, shadowSettings, type ShadowSettings } from './shadow.ts';
+import { Water } from './water.ts';
 import {
   Fn,
-  cameraPosition,
   cameraWorldMatrix,
-  cos,
-  dot,
-  length,
-  max,
   mix,
-  modelWorldMatrix,
-  mx_noise_float,
-  normalize,
-  oneMinus,
   output,
-  positionGeometry,
   positionViewDirection,
-  positionWorld,
-  pow,
-  reflect,
-  sin,
   smoothstep,
-  time,
   transformDirection,
   uniform,
-  vec2,
   vec3,
   vec4,
 } from 'three/tsl';
@@ -63,46 +46,6 @@ const HEMI_SKY = new Color(0xbfd8ff);
 const HEMI_GROUND = new Color(0x4a3f2c);
 const AMBIENT = new Color(0x404860);
 
-// --- Stylized water ----------------------------------------------------------
-/** Grid resolution of the global water plane (9.4 m cells over 1200 m): enough for the vertex waves near the camera. */
-const WATER_SEGMENTS = 128;
-/** Full waves/ripple/fresnel inside this radius; flat color + fog beyond. */
-const WATER_NEAR = 30;
-const WATER_FAR = 60;
-/** Wave field tuning: three sines with different directions and speeds. */
-const WAVE_SPEED = 0.5; // rad/s
-const WAVE_FREQ_X = 0.35; // rad/m
-const WAVE_FREQ_Z = 0.26; // rad/m
-const WAVE_FREQ_DIAG = 0.16; // rad/m
-const WAVE_AMPLITUDE = 0.4; // m
-/** Procedural ripple: scrolling 2D Perlin noise, no textures (VRAM 0). */
-const RIPPLE_SCALE = 0.9; // 1/m
-const RIPPLE_SPEED = 0.15; // 1/s
-/** Fresnel and sun glint. */
-const FRESNEL_POWER = 3;
-const SPECULAR_POWER = 90;
-const SPECULAR_STRENGTH = 0.6;
-/** Water quality axis: 0 = dead water (murky, opaque), 1 = live water (clear, transparent). */
-const WATER_DEAD = new Color(0x3f5146);
-const WATER_LIVE = new Color(0x1c6e83);
-const WATER_OPACITY_DEAD = 0.9;
-const WATER_OPACITY_LIVE = 0.66;
-const WATER_DEFAULT_QUALITY = 0.6;
-/** Unlit deep-water brightness: ambient floor + day gain, so the sea darkens at night. */
-const WATER_AMBIENT = 0.25;
-const WATER_DAY_GAIN = 0.75;
-
-/** Wave field: returns vec3(height, slopeX, slopeZ) for a world-space xz coordinate. */
-const waveField = Fn(([wxz]: [Node<'vec2'>]) => {
-  const t = time.mul(WAVE_SPEED);
-  const px = wxz.x.mul(WAVE_FREQ_X).add(t);
-  const pz = wxz.y.mul(WAVE_FREQ_Z).add(t.mul(1.3));
-  const pd = wxz.x.add(wxz.y).mul(WAVE_FREQ_DIAG).add(t.mul(0.7));
-  const h = sin(px).add(sin(pz).mul(0.6)).add(sin(pd).mul(0.4));
-  const sx = cos(px).mul(WAVE_FREQ_X).add(cos(pd).mul(WAVE_FREQ_DIAG).mul(0.4));
-  const sz = cos(pz).mul(WAVE_FREQ_Z).mul(0.6).add(cos(pd).mul(WAVE_FREQ_DIAG).mul(0.4));
-  return vec3(h, sx, sz);
-});
 /** Server tick 0 starts at this time of day (0 = midnight, 0.25 = sunrise): pre-dawn, the sun rises as the player gathers themselves. */
 const START_TIME = 0.21;
 /** Share of the light and sky brightness left at vision 0: the gray start is dim and foggy, not just colorless. */
@@ -175,17 +118,8 @@ export class Environment {
   /** Saturated zenith color of the gradient, from the time of day before `visionState` fades it. */
   private readonly zenith = ZENITH_DAY.clone();
   private readonly zenithBase = ZENITH_DAY.clone();
-  private readonly waterMaterial = new NodeMaterial();
-  private readonly water = new Mesh(
-    new PlaneGeometry(1200, 1200, WATER_SEGMENTS, WATER_SEGMENTS).rotateX(-Math.PI / 2),
-    this.waterMaterial,
-  );
-  /** Water knobs: quality (0 dead→1 live), fresnel reflection sky, sun direction and the day factor. */
-  private readonly waterQualityUniform = uniform(WATER_DEFAULT_QUALITY);
-  private readonly waterSkyUniform = uniform(this.skyBase);
-  private readonly sunDirectionUniform = uniform(new Vector3(0, 1, 0));
-  private readonly dayUniform = uniform(1);
-  private waterQualityValue = WATER_DEFAULT_QUALITY;
+  /** The sea: its own module (`render/water.ts`), fed the sky color and the sun here. */
+  readonly water: Water;
   private readonly disc: Sprite;
   /** Low ground fog: a few soft planes that hug the terrain and follow the player. */
   private readonly fogBlobs: Mesh[] = [];
@@ -232,15 +166,19 @@ export class Environment {
 
   /** 0 — мёртвая вода (мутная, плотная), 1 — живая (чистая, прозрачная). Clamped like `visionState`. */
   get waterQuality(): number {
-    return this.waterQualityValue;
+    return this.water.quality;
   }
 
   set waterQuality(value: number) {
-    this.waterQualityValue = clampVision(value);
-    this.waterQualityUniform.value = this.waterQualityValue;
+    this.water.quality = value;
   }
 
-  constructor(scene: Scene) {
+  /** Ground height under a world point: the low fog hugs the terrain instead of floating at eye level. */
+  private readonly heightAt: (x: number, z: number) => number;
+
+  constructor(scene: Scene, heightAt: (x: number, z: number) => number = () => WATER_LEVEL) {
+    this.heightAt = heightAt;
+    this.water = new Water(scene, this.skyBase, this.zenithBase);
     // Sky gradient: horizon matches the fog color so there is no seam where the two meet. Both are fed the
     // same raw color values and go through the same tone mapping, so they stay in lock-step.
     const horizon = uniform(this.sky);
@@ -302,48 +240,7 @@ export class Environment {
     // Map size and coverage are the runtime axis (render/shadow.ts), so a bench or the player can trade
     // shadow sharpness for frame time without a rebuild.
     this.applyShadow(DEFAULT_SHADOW);
-    // Stylized water (see issue #39): vertex waves + fresnel + procedural ripple, gated by distance. No
-    // reflections and no refraction. The colors are raw: the output node applies `visionState` once, like grass.
-    const waterDead = uniform(new Color(WATER_DEAD));
-    const waterLive = uniform(new Color(WATER_LIVE));
-    this.waterMaterial.transparent = true;
-    this.waterMaterial.opacityNode = mix(WATER_OPACITY_DEAD, WATER_OPACITY_LIVE, this.waterQualityUniform);
-
-    // Vertex waves: displace along the plane normal, faded out past the near radius so the far sea stays flat.
-    this.waterMaterial.positionNode = Fn(() => {
-      const worldPos = modelWorldMatrix.mul(positionGeometry).xyz;
-      const gate = smoothstep(WATER_FAR, WATER_NEAR, length(worldPos.xz.sub(cameraPosition.xz)));
-      const h = waveField(worldPos.xz).x.mul(WAVE_AMPLITUDE).mul(gate);
-      return positionGeometry.add(vec3(0.0, h, 0.0));
-    })();
-
-    // Fragment: wave normal + scrolling ripple → fresnel sky reflection + sun glint + deep color by quality.
-    this.waterMaterial.colorNode = Fn(() => {
-      const worldPos = positionWorld;
-      const eyeDir = normalize(cameraPosition.sub(worldPos));
-      const gate = smoothstep(WATER_FAR, WATER_NEAR, length(cameraPosition.sub(worldPos)));
-
-      const field = waveField(worldPos.xz);
-      const slope = vec2(field.y, field.z).mul(WAVE_AMPLITUDE).mul(gate);
-      const normal = normalize(vec3(slope.x.negate(), 1.0, slope.y.negate()));
-
-      const scroll = time.mul(RIPPLE_SPEED);
-      const ripple = mx_noise_float(worldPos.xz.mul(RIPPLE_SCALE).add(vec2(scroll, scroll.mul(0.6))));
-
-      const ndv = max(dot(normal, eyeDir), 0.0);
-      const fresnel = pow(oneMinus(ndv), FRESNEL_POWER).mul(oneMinus(ripple.mul(0.3)));
-
-      const deep = mix(waterDead, waterLive, this.waterQualityUniform);
-      const light = this.dayUniform.mul(WATER_DAY_GAIN).add(WATER_AMBIENT);
-
-      const ref = reflect(this.sunDirectionUniform.negate(), normal);
-      const spec = pow(max(dot(ref, eyeDir), 0.0), SPECULAR_POWER).mul(SPECULAR_STRENGTH).mul(this.dayUniform);
-
-      return deep.mul(light).add(this.waterSkyUniform.mul(fresnel).mul(gate)).add(vec3(spec).mul(gate));
-    })();
-
-    this.water.position.y = WATER_LEVEL;
-    scene.add(this.sun, this.sun.target, this.hemi, this.ambient, this.water, this.disc);
+    scene.add(this.sun, this.sun.target, this.hemi, this.ambient, this.disc);
     // Fog: near flat far water and the far ring of terrain/trees, so the horizon melts into the sky.
     scene.fog = this.fog;
   }
@@ -402,10 +299,8 @@ export class Environment {
     applyVision(this.zenith, vision);
     this.zenith.multiplyScalar(dim);
 
-    // Water uniforms: the fresnel reflection reads the raw sky (`waterSkyUniform` = `skyBase`), and the
-    // specular follows the sun. `visionState` reaches the water through the global output node, not here.
-    this.sunDirectionUniform.value.set(dirX, dirY, 0.4).normalize();
-    this.dayUniform.value = day;
+    // The water reads the raw sky and the sun; `visionState` reaches it through the global output node.
+    this.water.update(focusX, focusZ, dirX, dirY, day);
 
     // Sun/moon disc: the visible body is above the horizon; the sun by day, the moon by night.
     const sunElev = Math.sin(angle);
@@ -424,21 +319,19 @@ export class Environment {
     this.curveContrast.value = CURVE_CONTRAST;
     this.curveGain.value = 1 - (1 - CURVE_NIGHT_GAIN) * (1 - day);
 
-    // Snap to a grid so the water plane does not swim with the camera.
-    this.water.position.x = Math.round(focusX / 50) * 50;
-    this.water.position.z = Math.round(focusZ / 50) * 50;
-
-    // Low fog hugs the ground around the player and drifts slowly.
+    // Low fog hugs the ground around the player and drifts slowly. Each blob sits on the terrain under it,
+    // not at eye level: a flat sheet at `focusY + 0.4` reads as a grey puddle on a beach and as a cloud bank
+    // over the sea. Over water the low fog is skipped (the water plane would cut through it anyway).
     const simT = serverTick * TICK_DT;
     for (let i = 0; i < this.fogBlobs.length; i++) {
       const blob = this.fogBlobs[i];
       const a = (i / this.fogBlobs.length) * Math.PI * 2 + simT * 0.02;
       const r = 12 + (i % 3) * 16;
-      blob.position.set(
-        focusX + Math.cos(a) * r,
-        focusY + 0.4 + Math.sin(simT * 0.15 + i * 1.9) * 0.3,
-        focusZ + Math.sin(a) * r,
-      );
+      const bx = focusX + Math.cos(a) * r;
+      const bz = focusZ + Math.sin(a) * r;
+      const groundY = this.heightAt(bx, bz);
+      blob.visible = groundY > WATER_LEVEL - 0.2;
+      blob.position.set(bx, groundY + 0.35 + Math.sin(simT * 0.15 + i * 1.9) * 0.2, bz);
       (blob.material as MeshBasicMaterial).color.copy(this.fog.color);
       (blob.material as MeshBasicMaterial).opacity = FOG_BLOB_OPACITY * dim;
     }
