@@ -94,6 +94,7 @@ const bench =
           benchSceneParam === 'water' ||
           benchSceneParam === 'shore' ||
           benchSceneParam === 'surf' ||
+          benchSceneParam === 'edge' ||
           benchSceneParam === 'sky' ||
           benchSceneParam === 'sun'
             ? benchSceneParam

@@ -5,8 +5,8 @@ import type { ChunkManager } from '../world/chunks.ts';
 import { frameStats, type FrameStats } from './stats.ts';
 import { takeHitches, type Hitch } from './hitches.ts';
 
-/** Where the fixed camera looks: the spawn meadow, a tree, open water, the surf line, the sky, or the sun. */
-export type BenchSceneKind = 'spawn' | 'trees' | 'water' | 'shore' | 'surf' | 'sky' | 'sun';
+/** Where the fixed camera looks: the spawn meadow, a tree, open water, the surf line, the shore edge, the sky, or the sun. */
+export type BenchSceneKind = 'spawn' | 'trees' | 'water' | 'shore' | 'surf' | 'edge' | 'sky' | 'sun';
 
 export interface BenchOptions {
   seconds?: number;
@@ -274,6 +274,19 @@ export function createBench(options: BenchOptions = {}) {
       const bz = body.z / len;
       cam.position.set(px, target.terrain.heightAt(px, pz) + 1.6, pz);
       cam.lookAt(px + bx * 200, cam.position.y + 0.4, pz + bz * 200);
+      return;
+    }
+    if (scene === 'edge') {
+      // `edge`: stand a metre inland and look 15° down along the waterline — wet sand, the leading edge and the
+      // first metres of water in one frame. `surf` looks straight out to sea and sees only the shallow sheet.
+      if (!shore) shore = findShore(target.terrain);
+      const cam = target.view.camera;
+      const tx = -shore.nz;
+      const tz = shore.nx;
+      const px = shore.x - shore.nx * 1.2;
+      const pz = shore.z - shore.nz * 1.2;
+      cam.position.set(px, target.terrain.heightAt(px, pz) + 1.9, pz);
+      cam.lookAt(shore.x + tx * 7 + shore.nx * 2.5, WATER_LEVEL - 0.05, shore.z + tz * 7 + shore.nz * 2.5);
       return;
     }
     if (scene === 'shore' || scene === 'surf') {
