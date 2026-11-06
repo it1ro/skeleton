@@ -19,6 +19,7 @@
     "assets": "tsx scripts/build-assets.ts",
     "assets:rig": "tsx scripts/build-meshy.ts",
     "bench:aio": "tsx scripts/bench-aio.ts",
+    "trees:preview": "tsx scripts/tree-preview.ts",
     "play:aio": "tsx scripts/run-aio.ts",
     "test": "vitest run",
     "test:watch": "vitest"

@@ -60,7 +60,10 @@ const bench =
         seconds: benchSeconds,
         name: params.get('benchName') ?? (benchRun ? 'run' : 'spawn'),
         run: benchRun,
-        scene: benchSceneParam === 'water' || benchSceneParam === 'sky' ? benchSceneParam : 'spawn',
+        scene:
+          benchSceneParam === 'trees' || benchSceneParam === 'water' || benchSceneParam === 'sky'
+            ? benchSceneParam
+            : 'spawn',
       });
 
 declare global {

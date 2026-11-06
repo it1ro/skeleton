@@ -10,7 +10,7 @@ import {
   ConeGeometry,
   CylinderGeometry,
   Float32BufferAttribute,
-  IcosahedronGeometry,
+  OctahedronGeometry,
   MeshStandardNodeMaterial,
 } from 'three/webgpu';
 import { Fn, float, instanceIndex, positionLocal, sin, time, uniform, vec3 } from 'three/tsl';
@@ -26,15 +26,17 @@ export interface Part {
 
 const BARK_DARK = new Color(0x33251a);
 const BARK = new Color(0x4a3a2a);
+const MOSS = new Color(0x3f4a32);
 
-const SPRUCE_DARK = new Color(0x18201a);
-const SPRUCE_LIGHT = new Color(0x3a4632);
+const SPRUCE_DARK = new Color(0x33402f);
+const SPRUCE_LIGHT = new Color(0x6b7758);
 
-const BIRCH_BARK = new Color(0xe8e4d8);
+const BIRCH_BARK = new Color(0xd9d4c4);
 const BIRCH_MARK = new Color(0x3a3a34);
 const BIRCH_BRANCH = new Color(0x5a4a3a);
-const BIRCH_DARK = new Color(0x5f7040);
-const BIRCH_LIGHT = new Color(0xa8b86a);
+const BIRCH_DARK = new Color(0x5a6a48);
+const BIRCH_LIGHT = new Color(0xa9b56e);
+const BIRCH_WARM = new Color(0xb8b072);
 
 const DEAD_DARK = new Color(0x463628);
 const DEAD_LIGHT = new Color(0x7a6a58);
@@ -85,26 +87,6 @@ function bend(geometry: BufferGeometry, height: number, seed: number, lean: numb
   pos.needsUpdate = true;
 }
 
-/**
- * Flares a centered cone's base outward and down: `amount` fades with height, so the profile curves
- * instead of a straight edge — a drooping spruce skirt, not a party hat.
- */
-function flareCone(geometry: BufferGeometry, height: number, amount: number): void {
-  const pos = geometry.getAttribute('position');
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const y = pos.getY(i);
-    const z = pos.getZ(i);
-    const t = (y + height / 2) / height; // 0 base .. 1 tip
-    const r = Math.hypot(x, z);
-    if (r < 1e-4) continue; // the tip
-    const grow = (1 - t) * amount;
-    const k = (r + grow) / r;
-    pos.setXYZ(i, x * k, y - grow * 0.7, z * k);
-  }
-  pos.needsUpdate = true;
-}
-
 /** Expands every part to non-indexed triangles and concatenates positions, normals and vertex colors. */
 export function mergeParts(parts: Part[]): BufferGeometry {
   const positions: number[] = [];
@@ -135,194 +117,462 @@ export function mergeParts(parts: Part[]): BufferGeometry {
   return merged;
 }
 
-/** A tiered spruce: a visible trunk and stacked, drooping, jittered cone layers. */
+/** A root buttress lying outward and down from the trunk base: no tree ends in a cut cylinder. */
+function rootParts(radius: number, seed: number, count: number, color: Color): Part[] {
+  const parts: Part[] = [];
+  for (let i = 0; i < count; i++) {
+    const yaw = (i / count) * Math.PI * 2 + hash(i, 0, 0, seed) * 1.3;
+    const length = radius * (2.0 + hash(i, 1, 0, seed) * 1.6);
+    const geometry = new ConeGeometry(radius * 0.6, length, 5, 1);
+    geometry.translate(0, length / 2, 0);
+    geometry.rotateZ(-Math.PI / 2 - 0.3);
+    geometry.rotateY(yaw);
+    geometry.scale(1, 0.75, 1);
+    geometry.translate(0, radius * 1.2, 0);
+    jitter(geometry, radius * 0.45, seed + i * 19);
+    geometry.computeVertexNormals();
+    parts.push({ geometry, color: () => [color.r, color.g, color.b] });
+  }
+  return parts;
+}
+
+interface SpruceSpec {
+  /** Height of the lowest whorl and of the tip, meters. */
+  start: number;
+  top: number;
+  radius: number;
+  tiers: number;
+  paws: number;
+  droop: number;
+  /** Share of paws skipped per whorl: a ragged, aging spruce. */
+  gap: number;
+}
+
+/**
+ * Four silhouettes. A spruce is not a smooth cone: each whorl is a ring of separate drooping paws with
+ * sky between them, so the outline is ragged at every tier and reads as a tree against the dawn sky.
+ */
+const SPRUCE_VARIANTS: readonly SpruceSpec[] = [
+  { start: 0.55, top: 8.6, radius: 2.1, tiers: 14, paws: 6, droop: 0.3, gap: 0.05 },
+  { start: 0.5, top: 7.4, radius: 2.6, tiers: 13, paws: 7, droop: 0.38, gap: 0.03 },
+  { start: 0.7, top: 9.2, radius: 2.3, tiers: 15, paws: 5, droop: 0.26, gap: 0.22 },
+  { start: 0.45, top: 5.8, radius: 1.7, tiers: 8, paws: 5, droop: 0.36, gap: 0.02 },
+];
+
 function spruce(seed: number, variant: number): BufferGeometry {
+  const spec = SPRUCE_VARIANTS[variant] ?? SPRUCE_VARIANTS[0];
   const parts: Part[] = [];
 
-  const trunk = new CylinderGeometry(0.14, 0.26, 4.4, 6, 2);
-  bend(trunk, 4.4, seed, 0.12);
-  trunk.translate(0, 2.2, 0);
+  const trunkHeight = spec.top + 0.2;
+  const trunk = new CylinderGeometry(0.07, 0.28, trunkHeight, 7, 5);
+  bend(trunk, trunkHeight, seed, 0.05);
+  trunk.translate(0, trunkHeight / 2, 0);
   parts.push({
     geometry: trunk,
     color: (_x, y) => {
-      const c = mix(BARK_DARK, BARK, y / 3);
+      // Below the first whorl the trunk is bark; above it fades into the needle mass, never a lit stripe.
+      const bark = mix(BARK_DARK, BARK, clamp01(y / 6) * 0.6);
+      const c = mix(bark, SPRUCE_DARK, clamp01((y - 1.1) / 1.6));
       return [c.r, c.g, c.b];
     },
   });
+  parts.push(...rootParts(0.3, seed + 3, 4, BARK_DARK));
 
-  const tiers =
-    variant === 0
-      ? [
-          { base: 1.2, height: 3.4, radius: 1.95, angle: 0.0 },
-          { base: 2.8, height: 2.9, radius: 1.55, angle: 0.5 },
-          { base: 4.2, height: 2.4, radius: 1.15, angle: 0.2 },
-          { base: 5.4, height: 1.9, radius: 0.8, angle: 0.8 },
-          { base: 6.4, height: 1.5, radius: 0.5, angle: 0.35 },
-        ]
-      : [
-          { base: 1.0, height: 3.8, radius: 2.15, angle: 0.6 },
-          { base: 2.7, height: 3.1, radius: 1.6, angle: 0.1 },
-          { base: 4.2, height: 2.5, radius: 1.1, angle: 0.9 },
-          { base: 5.5, height: 1.8, radius: 0.65, angle: 0.3 },
-        ];
+  for (let tier = 0; tier < spec.tiers; tier++) {
+    const t = spec.tiers === 1 ? 0 : tier / (spec.tiers - 1); // 0 bottom .. 1 top
+    const y = spec.start + (spec.top - spec.start) * t;
+    // Reach shrinks faster near the tip than linearly: the classic spruce profile.
+    const reach = spec.radius * Math.pow(1 - t, 0.72) + 0.28;
+    const count = Math.max(3, Math.round(spec.paws - t * (spec.paws - 3)));
+    const baseYaw = hash(tier, 0, 0, seed) * Math.PI * 2;
+    // Upper whorls catch the sky, lower ones sit in their own shade: baked, not per-light cost.
+    const tierTint = 0.86 + t * 0.3;
 
-  tiers.forEach((tier, index) => {
-    const geometry = new ConeGeometry(tier.radius, tier.height, 7, 3);
-    flareCone(geometry, tier.height, tier.radius * 0.22);
-    geometry.rotateY(tier.angle);
-    geometry.translate(0, tier.base + tier.height / 2, 0);
-    jitter(geometry, tier.radius * 0.16, seed + index * 7);
-    geometry.computeVertexNormals();
-    const tint = 0.92 + index * 0.03;
-    parts.push({
-      geometry,
-      color: (x, y, z) => {
-        const t = clamp01((y - tier.base) / tier.height);
-        const c = mix(SPRUCE_DARK, SPRUCE_LIGHT, t * t);
-        const dapple = 0.9 + 0.2 * hash(x, y * 0.35, z, seed + 777);
-        return [c.r * tint * dapple, c.g * tint * dapple, c.b * tint * dapple];
-      },
-    });
-  });
+    for (let b = 0; b < count; b++) {
+      if (b > 0 && hash(tier, b, 1, seed) < spec.gap) continue; // a missing branch, not a hole in a cone
+      const yaw = baseYaw + (b / count) * Math.PI * 2 + (hash(tier, b, 2, seed) - 0.5) * 0.55;
+      const length = reach * (0.82 + hash(tier, b, 3, seed) * 0.4);
+      const droop = spec.droop * (0.7 + hash(tier, b, 4, seed) * 0.7);
+      // Needle mass of one branch: a wide, flattened cone, widest low on the tree.
+      const width = length * (0.4 - t * 0.13) * (0.82 + hash(tier, b, 5, seed) * 0.36);
 
-  return mergeParts(parts);
-}
+      const paw = new ConeGeometry(width, length, 4, 1);
+      // Base at the trunk, apex outward: a tapering branch, not a cone cap.
+      paw.translate(0, length / 2, 0);
+      paw.rotateZ(-Math.PI / 2 - droop);
+      paw.rotateY(yaw);
+      paw.scale(1, 0.62, 1);
+      paw.translate(0, y, 0);
+      jitter(paw, width * 0.7, seed + tier * 13 + b);
+      paw.computeVertexNormals();
 
-/** A birch: a pale, bent trunk with marks, branches, and a loose crown of jittered blobs. */
-function birch(seed: number, variant: number): BufferGeometry {
-  const parts: Part[] = [];
+      parts.push({
+        geometry: paw,
+        color: (x, py, z) => {
+          const r = Math.hypot(x, z);
+          const out = clamp01(r / length);
+          // Dark where a paw meets the trunk, lighter at its tips and underside.
+          const inner = 0.72 + 0.28 * Math.min(1, r * 2.2);
+          const under = py < y - width * 0.5 ? 0.86 : 1;
+          const k = tierTint * inner * under;
+          const c = mix(SPRUCE_DARK, SPRUCE_LIGHT, 0.1 + 0.9 * out);
+          const dapple = 0.92 + 0.16 * hash(x, py * 0.6, z, seed + 777);
+          return [c.r * k * dapple, c.g * k * dapple, c.b * k * dapple];
+        },
+      });
+    }
+  }
 
-  const trunk = new CylinderGeometry(0.12, 0.21, 6.2, 7, 8);
-  bend(trunk, 6.2, seed, 0.16);
-  trunk.translate(0, 3.1, 0);
+  // A thin leader above the last whorl; without it the tip looks chopped.
+  const leader = new ConeGeometry(0.11, 0.75, 5, 1);
+  leader.translate(0, spec.top + 0.3, 0);
+  leader.computeVertexNormals();
   parts.push({
-    geometry: trunk,
-    color: (x, y, z) => {
-      const angle = Math.atan2(z, x);
-      const bands = Math.sin(y * 3.7 + angle * 2.3) + Math.sin(y * 8.3 - angle * 1.7);
-      let c = bands > 1.15 ? BIRCH_MARK : BIRCH_BARK;
-      if (y < 0.7) c = mix(BIRCH_MARK, BIRCH_BARK, y / 0.7);
-      return [c.r, c.g, c.b];
-    },
-  });
-
-  const blobs =
-    variant === 0
-      ? [
-          { x: 0, y: 5.8, z: 0, r: 1.55 },
-          { x: 1.25, y: 5.2, z: 0.25, r: 1.15 },
-          { x: -1.2, y: 5.5, z: -0.35, r: 1.2 },
-          { x: 0.35, y: 6.9, z: -0.55, r: 1.0 },
-          { x: -0.45, y: 6.6, z: 0.85, r: 0.95 },
-          { x: 0.95, y: 4.5, z: -0.9, r: 0.75 },
-          { x: -0.95, y: 4.4, z: 0.55, r: 0.7 },
-          { x: 0.15, y: 7.4, z: 0.15, r: 0.7 },
-          { x: -0.2, y: 4.9, z: -1.1, r: 0.65 },
-          { x: 1.35, y: 5.9, z: -0.6, r: 0.7 },
-        ]
-      : [
-          { x: 0.2, y: 5.6, z: -0.2, r: 1.7 },
-          { x: 1.35, y: 5.0, z: 0.4, r: 1.1 },
-          { x: -1.3, y: 5.3, z: 0.1, r: 1.15 },
-          { x: -0.4, y: 6.8, z: -0.8, r: 0.95 },
-          { x: 0.5, y: 6.6, z: 0.9, r: 0.9 },
-          { x: -0.9, y: 4.3, z: -0.6, r: 0.7 },
-          { x: 0.8, y: 4.2, z: 0.7, r: 0.65 },
-          { x: -0.1, y: 7.5, z: -0.1, r: 0.7 },
-        ];
-
-  const branches =
-    variant === 0
-      ? [
-          { y: 5.0, length: 1.3, radius: 0.05, tilt: -0.85, turn: 0.5 },
-          { y: 5.6, length: 1.2, radius: 0.045, tilt: -0.95, turn: 2.6 },
-          { y: 4.6, length: 1.1, radius: 0.04, tilt: -0.8, turn: 4.4 },
-        ]
-      : [
-          { y: 5.1, length: 1.4, radius: 0.05, tilt: -0.9, turn: 1.3 },
-          { y: 4.7, length: 1.0, radius: 0.04, tilt: -0.75, turn: 3.9 },
-        ];
-
-  branches.forEach((branch, index) => {
-    const geometry = new CylinderGeometry(branch.radius * 0.5, branch.radius, branch.length, 5, 1);
-    geometry.translate(0, branch.length / 2, 0);
-    geometry.rotateZ(branch.tilt);
-    geometry.rotateY(branch.turn);
-    geometry.translate(0, branch.y, 0);
-    jitter(geometry, branch.radius * 0.8, seed + 100 + index);
-    geometry.computeVertexNormals();
-    parts.push({
-      geometry,
-      color: () => [BIRCH_BRANCH.r, BIRCH_BRANCH.g, BIRCH_BRANCH.b],
-    });
-  });
-
-  blobs.forEach((blob, index) => {
-    const geometry = new IcosahedronGeometry(blob.r, 0);
-    geometry.scale(1, 0.74, 1);
-    geometry.translate(blob.x, blob.y, blob.z);
-    jitter(geometry, blob.r * 0.24, seed + index * 11);
-    geometry.computeVertexNormals();
-    const tint = 0.92 + (index % 4) * 0.03;
-    parts.push({
-      geometry,
-      color: (x, y, z) => {
-        const t = clamp01((y - (blob.y - blob.r)) / (blob.r * 2));
-        const c = mix(BIRCH_DARK, BIRCH_LIGHT, 0.25 + 0.75 * t);
-        const dapple = 0.9 + 0.2 * hash(x, y * 0.4, z, seed + 555);
-        return [c.r * tint * dapple, c.g * tint * dapple, c.b * tint * dapple];
-      },
-    });
+    geometry: leader,
+    color: () => [SPRUCE_LIGHT.r, SPRUCE_LIGHT.g, SPRUCE_LIGHT.b],
   });
 
   return mergeParts(parts);
 }
 
-/** A dead trunk: bare, tapered, with a few broken branches instead of a crown. */
-function dead(seed: number): BufferGeometry {
+interface BirchSpec {
+  /** Height of the fork: below it one trunk, above it several leaders. */
+  fork: number;
+  /** Total height, used only to size the crown. */
+  height: number;
+  /** Crown half-width, meters. */
+  crown: number;
+  leaders: readonly { yaw: number; tilt: number; length: number }[];
+  branches: number;
+  lean: number;
+}
+
+/**
+ * A birch is a fork, not a pole: the trunk splits into two or three leaders, thin branches leave them at
+ * a droop, and the crown is a loose, wider-than-tall cloud of small clumps with sky through it.
+ */
+const BIRCH_VARIANTS: readonly BirchSpec[] = [
+  {
+    fork: 3.2, height: 8.8, crown: 2.6, branches: 10, lean: 0.16,
+    leaders: [
+      { yaw: 0.4, tilt: 0.22, length: 5.0 },
+      { yaw: 2.8, tilt: 0.34, length: 4.4 },
+      { yaw: 5.0, tilt: 0.16, length: 4.0 },
+    ],
+  },
+  {
+    fork: 2.7, height: 8.0, crown: 2.9, branches: 11, lean: 0.2,
+    leaders: [
+      { yaw: 1.2, tilt: 0.3, length: 4.7 },
+      { yaw: 4.1, tilt: 0.22, length: 4.7 },
+    ],
+  },
+  {
+    fork: 3.6, height: 9.2, crown: 2.5, branches: 9, lean: 0.24,
+    leaders: [
+      { yaw: 2.2, tilt: 0.18, length: 5.2 },
+      { yaw: 5.4, tilt: 0.36, length: 4.2 },
+    ],
+  },
+  {
+    fork: 2.1, height: 6.4, crown: 2.0, branches: 8, lean: 0.12,
+    leaders: [
+      { yaw: 0.9, tilt: 0.26, length: 3.8 },
+      { yaw: 3.6, tilt: 0.32, length: 3.4 },
+    ],
+  },
+];
+
+interface Clump {
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+}
+
+function birch(seed: number, variant: number): BufferGeometry {
+  const spec = BIRCH_VARIANTS[variant] ?? BIRCH_VARIANTS[0];
   const parts: Part[] = [];
-  const wood = (_x: number, y: number): Rgb => {
-    const c = mix(DEAD_DARK, DEAD_LIGHT, clamp01(y / 4.5));
-    return [c.r, c.g, c.b];
+  const bark = (_x: number, y: number, z: number): Rgb => {
+    const angle = Math.atan2(z, _x);
+    const bands = Math.sin(y * 3.7 + angle * 2.3) + Math.sin(y * 8.3 - angle * 1.7);
+    let c = bands > 1.15 ? BIRCH_MARK : BIRCH_BARK;
+    if (y < 0.7) c = mix(BIRCH_MARK, BIRCH_BARK, y / 0.7);
+    const silver = 0.94 + 0.08 * hash(_x, y * 0.5, z, seed + 91);
+    return [c.r * silver, c.g * silver, c.b * silver];
   };
 
-  const trunk = new CylinderGeometry(0.1, 0.3, 4.4, 6, 3);
-  bend(trunk, 4.4, seed, 0.14);
-  trunk.translate(0, 2.2, 0);
+  const trunk = new CylinderGeometry(0.13, 0.26, spec.fork, 7, 6);
+  bend(trunk, spec.fork, seed, spec.lean);
+  trunk.translate(0, spec.fork / 2, 0);
+  parts.push({ geometry: trunk, color: bark });
+
+  const rootBark = mix(BIRCH_BARK, BIRCH_MARK, 0.35);
+  parts.push(...rootParts(0.18, seed + 7, 3, rootBark));
+
+  const forkY = spec.fork;
+  const clumps: Clump[] = [];
+
+  spec.leaders.forEach((leader, index) => {
+    // One leader continues the trunk; the others leave it at the fork.
+    const leaderGeom = new CylinderGeometry(0.055, 0.13, leader.length, 6, 5);
+    bend(leaderGeom, leader.length, seed + index * 3, 0.12);
+    leaderGeom.translate(0, leader.length / 2, 0);
+    leaderGeom.rotateZ(-leader.tilt);
+    leaderGeom.rotateY(leader.yaw);
+    leaderGeom.translate(0, forkY - 0.15, 0);
+    parts.push({ geometry: leaderGeom, color: bark });
+
+    // A cap at the leader tip keeps a bare stick from poking through the crown.
+    const tipX = Math.sin(leader.tilt) * Math.cos(leader.yaw) * leader.length;
+    const tipZ = -Math.sin(leader.tilt) * Math.sin(leader.yaw) * leader.length;
+    const tipY = forkY - 0.15 + Math.cos(leader.tilt) * leader.length;
+    clumps.push({ x: tipX, y: tipY, z: tipZ, r: 0.4 + hash(index, 2, 0, seed) * 0.2 });
+  });
+
+  // Branches: from a point along a leader, outward and down, each ending in a couple of clumps.
+  for (let b = 0; b < spec.branches; b++) {
+    const leader = spec.leaders[b % spec.leaders.length];
+    const cosYaw = Math.cos(leader.yaw);
+    const sinYaw = Math.sin(leader.yaw);
+    const dx = Math.sin(leader.tilt) * cosYaw;
+    const dz = -Math.sin(leader.tilt) * sinYaw;
+    const s = 0.5 + (b / spec.branches) * 0.42;
+    const fromY = forkY - 0.15 + Math.cos(leader.tilt) * leader.length * s;
+    const fx = dx * leader.length * s;
+    const fz = dz * leader.length * s;
+    const yaw = hash(b, 7, 0, seed) * Math.PI * 2;
+    const droop = 0.45 + hash(b, 8, 0, seed) * 0.5;
+    const length = (0.9 + hash(b, 9, 0, seed) * 0.8) * (spec.crown / 2.6);
+
+    const branch = new CylinderGeometry(0.018, 0.045, length, 5, 2);
+    branch.translate(0, length / 2, 0);
+    branch.rotateZ(-Math.PI / 2 - droop);
+    branch.rotateY(yaw);
+    branch.translate(fx, fromY, fz);
+    jitter(branch, 0.03, seed + b * 5);
+    branch.computeVertexNormals();
+    parts.push({
+      geometry: branch,
+      color: () => [BIRCH_BRANCH.r, BIRCH_BRANCH.g, BIRCH_BRANCH.b],
+    });
+
+  }
+
+  // The crown is one loose cloud, wider than tall: a few big masses set the shape, many small clumps
+  // break the outline, and the rim is sampled outward so the edge is ragged, never an egg.
+  const crownBase = forkY + 0.35;
+  const crownTop = spec.height;
+  const cy = (crownBase + crownTop) / 2;
+  const ry = (crownTop - crownBase) / 2;
+  const rx = spec.crown;
+
+  for (let i = 0; i < 5; i++) {
+    const theta = (i / 5) * Math.PI * 2 + hash(i, 50, 0, seed) * 0.8;
+    const rad = 0.4 + hash(i, 51, 0, seed) * 0.25;
+    clumps.push({
+      x: Math.cos(theta) * rx * rad,
+      y: cy + (hash(i, 52, 0, seed) - 0.5) * ry * 0.9,
+      z: Math.sin(theta) * rx * rad,
+        r: 0.34 + hash(i, 53, 0, seed) * 0.14,
+    });
+  }
+
+  // A Fibonacci sphere keeps the shell evenly covered, then jitter and radius noise break the order:
+  // an even distribution is what stops an airy crown from falling apart into separate baubles.
+  const grains = 150;
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < grains; i++) {
+    const phi = Math.acos(1 - (2 * (i + 0.5)) / grains) + (hash(i, 61, 0, seed) - 0.5) * 0.22;
+    const theta = i * golden + (hash(i, 60, 0, seed) - 0.5) * 0.55;
+    const rad = 0.78 + hash(i, 62, 0, seed) * 0.22;
+    const ring = Math.sin(phi);
+    // Lobes and a domed top keep the cloud from reading as a sphere.
+    const bulge = 1 + 0.14 * Math.sin(theta * 3 + seed) + 0.08 * Math.cos(phi * 2.2);
+    clumps.push({
+      x: Math.cos(theta) * ring * rad * rx * bulge,
+      y: Math.max(crownBase - 0.25, cy + Math.cos(phi) * rad * ry),
+      z: Math.sin(theta) * ring * rad * rx * bulge,
+      r: 0.2 + hash(i, 63, 0, seed) * 0.15,
+    });
+  }
+  // A sparse inner layer closes the see-through gaps without thickening the rim.
+  for (let i = 0; i < 40; i++) {
+    const theta = hash(i, 80, 0, seed) * Math.PI * 2;
+    const up = hash(i, 81, 0, seed) * 2 - 1;
+    const rad = 0.25 + hash(i, 82, 0, seed) * 0.4;
+    const ring = Math.sqrt(Math.max(0, 1 - up * up));
+    clumps.push({
+      x: Math.cos(theta) * ring * rad * rx,
+      y: Math.max(crownBase - 0.2, cy + up * rad * ry),
+      z: Math.sin(theta) * ring * rad * rx,
+      r: 0.26 + hash(i, 83, 0, seed) * 0.16,
+    });
+  }
+
+  // Drooping tufts under the rim: birches hang, they do not wear a ball.
+  for (let i = 0; i < 3; i++) {
+    const theta = hash(i, 70, 0, seed) * Math.PI * 2;
+    clumps.push({
+      x: Math.cos(theta) * rx * 0.62,
+      y: crownBase - 0.1,
+      z: Math.sin(theta) * rx * 0.62,
+      r: 0.3 + hash(i, 71, 0, seed) * 0.14,
+    });
+  }
+
+  // Crown metrics for baked occlusion: clumps deep inside the cloud are darker than the rim.
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let sumX = 0;
+  let sumZ = 0;
+  for (const clump of clumps) {
+    minY = Math.min(minY, clump.y);
+    maxY = Math.max(maxY, clump.y);
+    sumX += clump.x;
+    sumZ += clump.z;
+  }
+  const cx = sumX / clumps.length;
+  const cz = sumZ / clumps.length;
+  let crownR = 1;
+  for (const clump of clumps) crownR = Math.max(crownR, Math.hypot(clump.x - cx, clump.z - cz));
+  const spanY = Math.max(0.001, maxY - minY);
+
+  clumps.forEach((clump, index) => {
+    // Small faceted clumps, not boulders: many of them read as a leaf mass at arm's length and
+    // still merge into one crown at a hundred meters.
+    const geometry = new OctahedronGeometry(clump.r, 0);
+    geometry.scale(1, 0.8, 1);
+    // Tumble each clump: aligned facets read as a tiled ball, tumbled ones as foliage.
+    geometry.rotateX(hash(clump.x, clump.z, clump.y, seed + 71) * Math.PI);
+    geometry.rotateY(hash(clump.x, clump.y, clump.z, seed + index) * Math.PI * 2);
+    geometry.rotateZ(hash(clump.y, clump.x, clump.z, seed + 73) * Math.PI);
+    geometry.translate(clump.x, clump.y, clump.z);
+    jitter(geometry, clump.r * 0.26, seed + index * 11);
+    geometry.computeVertexNormals();
+
+    const inner = clamp01(1 - Math.hypot(clump.x - cx, clump.z - cz) / (crownR * 1.05));
+    const height = clamp01((clump.y - minY) / spanY);
+    const openness = clamp01(0.5 + 0.4 * height - 0.4 * inner);
+    const warm = hash(clump.x, clump.y, clump.z, seed + 42);
+    const c = mix(mix(BIRCH_DARK, BIRCH_LIGHT, 0.25 + 0.75 * openness), BIRCH_WARM, warm * 0.35);
+    // Each tuft a slightly different leaf tone: a flat canopy reads as plastic.
+    const tint = 0.84 + hash(clump.x, clump.y, clump.z, seed + 99) * 0.26;
+
+    parts.push({
+      geometry,
+      color: (x, y, z) => {
+        const local = clamp01((y - (clump.y - clump.r)) / (clump.r * 2));
+        const k = (0.9 + 0.15 * local) * tint; // underside in its own shade
+        const dapple = 0.88 + 0.24 * hash(x, y * 0.4, z, seed + 555);
+        return [c.r * k * dapple, c.g * k * dapple, c.b * k * dapple];
+      },
+    });
+  });
+
+  return mergeParts(parts);
+}
+
+interface DeadSpec {
+  height: number;
+  branches: number;
+  lean: number;
+  /** A snapped top instead of a standing trunk. */
+  broken: boolean;
+}
+
+const DEAD_VARIANTS: readonly DeadSpec[] = [
+  { height: 5.6, branches: 10, lean: 0.14, broken: false },
+  { height: 3.4, branches: 5, lean: 0.34, broken: true },
+];
+
+/** A dead trunk: bare, tapered, root-flared, with broken branches instead of a crown. */
+function dead(seed: number, variant: number): BufferGeometry {
+  const spec = DEAD_VARIANTS[variant] ?? DEAD_VARIANTS[0];
+  const parts: Part[] = [];
+  const wood = (x: number, y: number, z: number): Rgb => {
+    // Moss creeps up from the ground on one side: color, not a second material.
+    const moss = clamp01((1.1 - y) / 0.9) * clamp01(0.5 + 0.5 * hash(x * 0.7, 0, z * 0.7, seed + 31));
+    const c = mix(DEAD_DARK, DEAD_LIGHT, clamp01(y / 4.5));
+    const lit = mix(c, MOSS, moss * 0.55);
+    return [lit.r, lit.g, lit.b];
+  };
+
+  const trunk = new CylinderGeometry(0.08, 0.24, spec.height, 6, 5);
+  bend(trunk, spec.height, seed, spec.lean);
+  trunk.translate(0, spec.height / 2, 0);
   parts.push({ geometry: trunk, color: wood });
+  parts.push(...rootParts(0.16, seed + 13, 3, DEAD_DARK));
 
-  const branches = [
-    { y: 1.9, length: 1.6, radius: 0.07, tilt: -1.0, turn: 0.3 },
-    { y: 2.8, length: 1.9, radius: 0.07, tilt: -1.15, turn: 2.4 },
-    { y: 3.5, length: 1.4, radius: 0.05, tilt: -0.9, turn: 4.1 },
-    { y: 4.0, length: 1.0, radius: 0.04, tilt: -1.2, turn: 5.2 },
-    { y: 4.2, length: 0.7, radius: 0.06, tilt: 0.3, turn: 0 },
-  ];
-
-  branches.forEach((branch, index) => {
-    const geometry = new CylinderGeometry(branch.radius * 0.5, branch.radius, branch.length, 5, 1);
-    geometry.translate(0, branch.length / 2, 0);
-    geometry.rotateZ(branch.tilt);
-    geometry.rotateY(branch.turn);
-    geometry.translate(0, branch.y, 0);
-    jitter(geometry, branch.radius * 0.8, seed + index);
+  for (let b = 0; b < spec.branches; b++) {
+    // Branches crowd the top and thin out below, the way a snag dies from the crown down.
+    const t = (b + 1) / (spec.branches + 1);
+    const y = 0.8 + (1 - t * t) * (spec.height - 1.2);
+    const yaw = hash(b, 1, 0, seed) * Math.PI * 2;
+    const droop = 0.35 + hash(b, 2, 0, seed) * 0.9;
+    const length = (0.6 + hash(b, 3, 0, seed) * 1.2) * (spec.height / 5.2) * (0.7 + t * 0.5);
+    const radius = 0.03 + hash(b, 4, 0, seed) * 0.03;
+    const geometry = new CylinderGeometry(radius * 0.35, radius, length, 5, 2);
+    // A slight bend keeps dead branches from looking like nails.
+    bend(geometry, length, seed + b * 7, 0.12);
+    geometry.translate(0, length / 2, 0);
+    geometry.rotateZ(-Math.PI / 2 - droop);
+    geometry.rotateY(yaw);
+    geometry.translate(0, y, 0);
+    jitter(geometry, radius * 1.4, seed + b * 3);
     geometry.computeVertexNormals();
     parts.push({ geometry, color: wood });
-  });
+  }
+
+  // Broken-off stubs: the trunk is not a clean pole.
+  for (let i = 0; i < 3; i++) {
+    const stub = new ConeGeometry(0.06, 0.35 + hash(i, 20, 0, seed) * 0.3, 4, 1);
+    stub.translate(0, 0.25, 0);
+    stub.rotateZ(-Math.PI / 2 - 0.2);
+    stub.rotateY(hash(i, 21, 0, seed) * Math.PI * 2);
+    stub.translate(0, 1.2 + i * (spec.height - 2) * 0.32, 0);
+    jitter(stub, 0.08, seed + i * 37);
+    stub.computeVertexNormals();
+    parts.push({ geometry: stub, color: wood });
+  }
+
+  if (spec.broken) {
+    // Splinters at the break: three short shards fanned out of the stump.
+    for (let i = 0; i < 3; i++) {
+      const shard = new ConeGeometry(0.05, 0.55, 4, 1);
+      shard.translate(0, 0.27, 0);
+      shard.rotateZ(-0.15 - hash(i, 6, 0, seed) * 0.35);
+      shard.rotateY(hash(i, 7, 0, seed) * Math.PI * 2);
+      shard.translate(0, spec.height - 0.1, 0);
+      jitter(shard, 0.12, seed + i * 23);
+      shard.computeVertexNormals();
+      parts.push({ geometry: shard, color: wood });
+    }
+  } else {
+    // A snapped top: one leaning splinter and a jagged cap, not a fork.
+    const stub = new ConeGeometry(0.08, 0.9, 4, 1);
+    stub.translate(0, 0.4, 0);
+    stub.rotateZ(-0.3);
+    stub.rotateY(hash(3, 9, 0, seed) * Math.PI * 2);
+    stub.translate(0, spec.height - 0.2, 0);
+    jitter(stub, 0.16, seed + 29);
+    stub.computeVertexNormals();
+    parts.push({ geometry: stub, color: wood });
+  }
 
   return mergeParts(parts);
 }
 
 /** How many geometry variants a kind has; the client derives the variant from a position hash. */
 export function treeVariantCount(kind: TreeKind): number {
-  return kind === 'dead' ? 1 : 2;
+  return kind === 'dead' ? DEAD_VARIANTS.length : kind === 'birch' ? BIRCH_VARIANTS.length : SPRUCE_VARIANTS.length;
 }
 
 export function createTreeGeometry(kind: TreeKind, variant: number): BufferGeometry {
   const seed = (kind === 'spruce' ? 11 : kind === 'birch' ? 23 : 37) + variant * 31;
   if (kind === 'spruce') return spruce(seed, variant);
   if (kind === 'birch') return birch(seed, variant);
-  return dead(seed);
+  return dead(seed, variant);
 }
 
 /** Flat list of (kind, variant) pools, in wire order, plus the starting index of each kind. */

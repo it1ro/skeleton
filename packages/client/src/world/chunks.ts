@@ -374,13 +374,19 @@ export class ChunkManager {
           const z = data.trees[base + 2];
           const scale = data.trees[base + 3];
           const rotation = data.trees[base + 4];
-          // Two independent sizes: footprint from the wire scale, height stretched/squashed by a second hash.
+          // Three independent sizes: footprint from the wire scale, height and width by hashes.
           const height = scale * (0.85 + hash01(z, x) * 0.4);
-          composeInstance(matrix, at, x + ox, y - 0.3, z + oz, rotation, scale, height);
+          const spreadX = scale * (0.88 + hash01(x + 3.1, z) * 0.24);
+          const spreadZ = scale * (0.88 + hash01(x, z + 5.7) * 0.24);
+          // No trunk stands plumb: a degree or two of lean, planted at the same base point.
+          const tiltX = (hash01(x + 11.3, z) - 0.5) * 0.11;
+          const tiltZ = (hash01(x, z + 7.7) - 0.5) * 0.11;
+          composeInstance(matrix, at, x + ox, y - 0.35, z + oz, rotation, spreadX, height, spreadZ, tiltX, tiltZ);
           const tint = 0.9 + hash01(x, z) * 0.2;
-          color[at * 3] = tint;
+          // A hint of hue drift: some trees yellow, some blue-green, none of them the same.
+          color[at * 3] = tint * (0.97 + hash01(x + 1.7, z + 2.3) * 0.06);
           color[at * 3 + 1] = tint;
-          color[at * 3 + 2] = tint;
+          color[at * 3 + 2] = tint * (0.94 + hash01(z + 4.1, x + 5.9) * 0.08);
         });
         return { matrix, color };
       });

@@ -169,7 +169,7 @@ function printHelp(): void {
   --shadow <0..1>       shadow quality axis: 0 cheapest, 1 reference 2048² over ±70 m (default: 1)
   --vsync               measure with the display cap instead of uncapped
   --run                 run forward instead of standing still (chunk and grass streaming)
-  --scene <name>        camera target: spawn (default), water, sky
+  --scene <name>        camera target: spawn (default), trees, water, sky
   --min-fps <n>         exit with code 1 if the measured fps is lower
   --no-build            reuse packages/client/dist
   --keep                leave the HTTP server and Chrome running
