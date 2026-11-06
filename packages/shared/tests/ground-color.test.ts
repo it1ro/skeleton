@@ -76,6 +76,26 @@ describe('groundColor', () => {
     expect(luma(ocean)).toBeLessThan(luma(beach)); // darker than the shore
   });
 
+  it('wets the sand at the waterline and dries it up the beach', () => {
+    const wet = groundColor('beach', 0.05, 0, 12, -30);
+    const dry = groundColor('beach', 2.4, 0, 12, -30);
+    expect(luma(wet)).toBeLessThan(luma(dry) - 0.1);
+    expect(wet[0]).toBeGreaterThan(wet[2]); // still sand, not mud
+  });
+
+  it('keeps the seabed sandy at the shore, so the waterline has no colour seam', () => {
+    const bed = groundColor('ocean', -0.2, 0, 12, -30);
+    const sand = groundColor('beach', 0.05, 0, 12, -30);
+    const dry = groundColor('beach', 2.4, 0, 12, -30);
+    for (let i = 0; i < 3; i++) {
+      expect(Math.abs(bed[i] - sand[i])).toBeLessThan(0.08);
+      // The bed and the wet sand are the same family, far closer than either is to dry sand.
+      expect(Math.abs(bed[i] - sand[i])).toBeLessThan(Math.abs(bed[i] - dry[i]) / 3);
+    }
+    // Deeper down the murk wins again.
+    expect(luma(groundColor('ocean', -8, 0, 12, -30))).toBeLessThan(luma(bed));
+  });
+
   it('blends the soil pair without a seam, and t=0 is exactly the single-biome color', () => {
     const single = groundColor('meadows', 6, 0.2, 10, 20);
     expect(groundColorBlend('meadows', 'forest', 0, 6, 0.2, 10, 20)).toEqual(single);

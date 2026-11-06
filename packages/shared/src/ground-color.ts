@@ -15,6 +15,7 @@
  */
 
 import { BIOME_NAMES, BIOMES, type Biome } from './biomes.ts';
+import { WATER_LEVEL } from './constants.ts';
 
 /** sRGB→linear, bit-identical to three.js `ColorManagement.SRGBToLinear`. */
 function srgbToLinear(c: number): number {
@@ -45,6 +46,10 @@ const ASH = rgb(0x6a6a62); // «старые кострища»; ash around moun
 const PUDDLE = rgb(0x26302c); // dark wet hollows
 const ROCK = rgb(0x6e6a63);
 const SNOW = rgb(0xeef2f5);
+/** Wet sand at the waterline and the sandy bottom of the shallows: darker and cooler than dry sand. */
+const SAND_WET = rgb(0x9a8a68);
+/** Height above the waterline where the sand stops reading as wet, meters. */
+const WET_BAND = 0.8;
 
 const mix = (a: Rgb, b: Rgb, t: number): Rgb => [
   a[0] + (b[0] - a[0]) * t,
@@ -129,6 +134,8 @@ export function groundColor(biome: Biome, height: number, slope: number, wx: num
   const surface = BIOMES[biome].surface;
   const base = BASE[biome];
   if (surface === 'rock') return mix(base, ROCK, smoothstep(0.25, 0.55, slope));
+  if (surface === 'sand') return wetSand(base, height, wx, wz);
+  if (surface === 'water') return seabed(base, height);
   if (surface !== 'soil') return base;
   return soilColor(base, slope, wx, wz);
 }
@@ -152,6 +159,22 @@ export function groundColorBlend(
     return soilColor(mix(BASE[a], BASE[b], t), slope, wx, wz);
   }
   return mix(groundColor(a, height, slope, wx, wz), groundColor(b, height, slope, wx, wz), t);
+}
+
+/**
+ * The strip of beach the swash reaches: sand within ~0.5 m of the waterline darkens and cools, with a
+ * ragged edge (the wet line is never a contour). The same colour carries on under the water, so the
+ * shoreline reads as one surface instead of a sand/murk seam.
+ */
+function wetSand(base: Rgb, height: number, wx: number, wz: number): Rgb {
+  const ragged = 0.8 + 0.5 * fbm(wx * 0.11, wz * 0.11, 2);
+  const wet = smoothstep(WET_BAND * ragged, 0.03, height - WATER_LEVEL);
+  return mix(base, SAND_WET, wet * 0.9);
+}
+
+/** The seabed near the shore is sand, not the murk of the deep: the shallows need a bottom. */
+function seabed(base: Rgb, height: number): Rgb {
+  return mix(base, SAND_WET, smoothstep(-6, -0.3, height - WATER_LEVEL) * 0.85);
 }
 
 /** Soil ground: grass base plus the moisture/coverage patches, shared by every soil biome. */
