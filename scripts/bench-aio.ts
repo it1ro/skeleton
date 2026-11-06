@@ -29,6 +29,10 @@ interface Options {
   vision?: number;
   water?: number;
   shadow?: number;
+  /** Clock hour 0..24 to start the screenshot at (`?time=`), instead of the pre-dawn start. */
+  time?: number;
+  /** Paint the baked depth field (1) or the foam (2) instead of the sea (`?waterdebug=`). */
+  waterDebug?: number;
   build: boolean;
   keep: boolean;
   uncapped: boolean;
@@ -42,6 +46,14 @@ interface CdpResponse {
   id?: number;
   result?: unknown;
   error?: { message?: string };
+  /** Events (no id): page logs and exceptions, printed so a broken shader is visible in the bench output. */
+  method?: string;
+  params?: {
+    entry?: { level?: string; text?: string; url?: string; lineNumber?: number };
+    exceptionDetails?: { text?: string; exception?: { description?: string } };
+    type?: string;
+    args?: { value?: unknown; description?: string }[];
+  };
 }
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -61,6 +73,7 @@ function parseOptions(argv: string[]): Options {
     name: 'spawn',
     seed: 42,
     pixels: true,
+    vision: 1,
     build: true,
     keep: false,
     uncapped: true,
@@ -120,6 +133,15 @@ function parseOptions(argv: string[]): Options {
           throw new Error('--shadow takes a number from 0 (cheapest 512² over ±40 m) to 1 (2048² over ±70 m)');
         }
         break;
+      case '--time':
+        options.time = Number(value());
+        if (!Number.isFinite(options.time) || options.time < 0 || options.time > 24) {
+          throw new Error('--time takes an hour of the day from 0 to 24');
+        }
+        break;
+      case '--water-debug':
+        options.waterDebug = Number(value()) || 1;
+        break;
       case '--no-build':
         options.build = false;
         break;
@@ -166,9 +188,11 @@ function printHelp(): void {
   --vision <0..1>       gray→color hook: 0 for the gray start, 1 for full color (default: 1)
   --water <0..1>        water quality axis: 0 dead/murky, 1 live/clear (default: 0.6)
   --shadow <0..1>       shadow quality axis: 0 cheapest, 1 reference 2048² over ±70 m (default: 1)
+  --time <0..24>        clock hour for the screenshot (default: the 05:00 start)
+  --water-debug <1|2>   paint the depth field (1) or the foam (2) instead of the sea
   --vsync               measure with the display cap instead of uncapped
   --run                 run forward instead of standing still (chunk and grass streaming)
-  --scene <name>        camera target: spawn (default), water, sky
+  --scene <name>        camera target: spawn (default), trees, water, shore, surf, sky, sun
   --min-fps <n>         exit with code 1 if the measured fps is lower
   --no-build            reuse packages/client/dist
   --keep                leave the HTTP server and Chrome running
@@ -269,12 +293,14 @@ async function main(): Promise<void> {
 
     const url =
       `http://127.0.0.1:${options.httpPort}/?seed=${options.seed}&bench=${options.seconds}` +
-      `&benchName=${encodeURIComponent(options.name)}${options.pixels ? '' : '&pixels=0'}` +
+      `&benchName=${encodeURIComponent(options.name)}${options.pixels ? '&pixels=1' : '&pixels=0'}` +
       `${options.run ? '&benchRun' : ''}` +
       `${options.scene !== 'spawn' ? `&benchScene=${options.scene}` : ''}` +
       `${options.vision !== undefined ? `&vision=${options.vision}` : ''}` +
       `${options.water !== undefined ? `&water=${options.water}` : ''}` +
-      `${options.shadow !== undefined ? `&shadow=${options.shadow}` : ''}`;
+      `${options.shadow !== undefined ? `&shadow=${options.shadow}` : ''}` +
+      `${options.time !== undefined ? `&time=${options.time}` : ''}` +
+      `${options.waterDebug ? `&waterdebug=${options.waterDebug}` : ''}`;
     const chrome = [
       process.env.BENCH_PRIME_RUN ?? '/usr/local/bin/prime-run',
       process.env.BENCH_CHROME ?? '/usr/bin/google-chrome-stable',
@@ -337,7 +363,20 @@ async function main(): Promise<void> {
     let nextId = 0;
     socket.on('message', (raw) => {
       const message = JSON.parse(raw.toString()) as CdpResponse;
-      if (message.id === undefined) return;
+      if (message.id === undefined) {
+        if (message.method === 'Log.entryAdded') {
+          const entry = message.params?.entry;
+          const where = entry?.url ? ` (${entry.url}:${entry.lineNumber ?? 0})` : '';
+          console.error(`· [page ${entry?.level ?? 'log'}] ${entry?.text ?? ''}${where}`);
+        } else if (message.method === 'Runtime.exceptionThrown') {
+          const details = message.params?.exceptionDetails;
+          console.error(`· [page error] ${details?.exception?.description ?? details?.text ?? 'unknown'}`);
+        } else if (message.method === 'Runtime.consoleAPICalled') {
+          const args = (message.params?.args ?? []).map((arg) => arg.value ?? arg.description ?? '').join(' ');
+          console.error(`· [page ${message.params?.type ?? 'log'}] ${args}`);
+        }
+        return;
+      }
       const waiter = pending.get(message.id);
       if (!waiter) return;
       pending.delete(message.id);
@@ -356,6 +395,7 @@ async function main(): Promise<void> {
       });
 
     await send('Runtime.enable');
+    await send('Log.enable');
     await send('Page.enable');
     await send('Emulation.setDeviceMetricsOverride', {
       width: options.width,
@@ -404,6 +444,7 @@ async function main(): Promise<void> {
       vision: options.vision ?? 1,
       water: options.water ?? 0.6,
       shadow: options.shadow ?? 1,
+      time: options.time ?? null,
     };
     writeFileSync(`${base}.json`, `${JSON.stringify(report, null, 2)}\n`);
     if (screenshot) writeFileSync(`${base}.png`, Buffer.from(screenshot, 'base64'));

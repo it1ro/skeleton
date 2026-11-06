@@ -5,8 +5,8 @@ import type { ChunkManager } from '../world/chunks.ts';
 import { frameStats, type FrameStats } from './stats.ts';
 import { takeHitches, type Hitch } from './hitches.ts';
 
-/** Where the fixed camera looks: the spawn meadow, open water, or up at the sky. */
-export type BenchSceneKind = 'spawn' | 'water' | 'sky';
+/** Where the fixed camera looks: the spawn meadow, a tree, open water, the surf line, the sky, or the sun. */
+export type BenchSceneKind = 'spawn' | 'trees' | 'water' | 'shore' | 'surf' | 'sky' | 'sun';
 
 export interface BenchOptions {
   seconds?: number;
@@ -75,12 +75,83 @@ const ORBIT_START = Math.PI / 4;
 const ORBIT_PITCH = -0.16;
 const ORBIT_DISTANCE = 9;
 
+/** Closest tree to the spawn: the `trees` scene frames a birch if one is near, else whatever stands. */
+function findTree(terrain: Terrain): { x: number; y: number; z: number } | null {
+  let best: { x: number; y: number; z: number } | null = null;
+  let bestScore = Infinity;
+  for (let cx = -2; cx <= 2; cx++) {
+    for (let cz = -2; cz <= 2; cz++) {
+      for (const spot of terrain.treesInChunk(cx, cz)) {
+        const distance = Math.hypot(spot.x, spot.z);
+        if (distance < 10) continue;
+        const score = distance + (spot.kind === 'birch' ? 0 : 12);
+        if (score < bestScore) {
+          bestScore = score;
+          best = { x: spot.x, y: spot.y, z: spot.z };
+        }
+      }
+    }
+  }
+  return best;
+}
+
 /** First open-ocean cell along +x: the island is finite, so this always finds water. */
 function findOcean(terrain: Terrain): { x: number; z: number } {
+  // Deep water, not the first puddle past the waterline: the `water` scene is the open-sea glint, and a
+  // 0.5 m shelf under the camera turns it into a shallow sand film.
+  for (let d = 64; d < 8192; d += 16) {
+    if (terrain.heightAt(d, 0) < WATER_LEVEL - 4) return { x: d, z: 0 };
+  }
   for (let d = 64; d < 8192; d += 16) {
     if (terrain.heightAt(d, 0) < WATER_LEVEL - 0.5) return { x: d, z: 0 };
   }
   return { x: 512, z: 0 };
+}
+
+/**
+ * Nearest shoreline from the spawn: ray-march 360 directions to the waterline, coarse then refined.
+ * `n` is the outward (seaward) normal, so `-n` points inland.
+ */
+function findShore(terrain: Terrain): { x: number; z: number; nx: number; nz: number } {
+  let best = Infinity;
+  let bestAngle = 0;
+  for (let i = 0; i < 360; i++) {
+    const angle = (i / 360) * Math.PI * 2;
+    const dx = Math.cos(angle);
+    const dz = Math.sin(angle);
+    for (let d = 32; d < 900; d += 8) {
+      if (terrain.heightAt(dx * d, dz * d) < WATER_LEVEL) {
+        if (d < best) {
+          best = d;
+          bestAngle = angle;
+        }
+        break;
+      }
+    }
+  }
+  // Refine to the meter: the exact waterline changes with every meter on a gentle beach.
+  let angle = bestAngle;
+  for (const step of [1, 0.25]) {
+    const start = Math.max(32, best - 8);
+    let finest = best;
+    let finestAngle = angle;
+    for (let a = angle - 0.04; a <= angle + 0.04; a += 0.002) {
+      const dx = Math.cos(a);
+      const dz = Math.sin(a);
+      for (let d = start; d < best + 8; d += step) {
+        if (terrain.heightAt(dx * d, dz * d) < WATER_LEVEL) {
+          if (d < finest) {
+            finest = d;
+            finestAngle = a;
+          }
+          break;
+        }
+      }
+    }
+    best = finest;
+    angle = finestAngle;
+  }
+  return { x: Math.cos(angle) * best, z: Math.sin(angle) * best, nx: Math.cos(angle), nz: Math.sin(angle) };
 }
 
 export function createBench(options: BenchOptions = {}) {
@@ -100,6 +171,9 @@ export function createBench(options: BenchOptions = {}) {
   let triangles = 0;
   let casters = 0;
   let ocean: { x: number; z: number } | null = null;
+  let shore: { x: number; z: number; nx: number; nz: number } | null = null;
+  let tree: { x: number; y: number; z: number } | null = null;
+  let treeSearched = false;
   const times: number[] = [];
   const cpuTimes: number[] = [];
   const renderTimes: number[] = [];
@@ -159,13 +233,68 @@ export function createBench(options: BenchOptions = {}) {
     console.info('[bench]', result);
   }
 
-  /** Positions the camera for the current frame for `water` and `sky`; `spawn` goes through the orbit. */
-  function placeCameraImpl(pos: { x: number; y: number; z: number }): void {
+  /** Positions the camera for the current frame for every fixed scene; `spawn` goes through the orbit. */
+  function placeCameraImpl(
+    pos: { x: number; y: number; z: number },
+    body: { x: number; y: number; z: number } = { x: 1, y: 0, z: 0 },
+  ): void {
     if (!target || scene === 'spawn') return;
+    if (scene === 'trees') {
+      if (!treeSearched) {
+        tree = findTree(target.terrain);
+        treeSearched = true;
+      }
+      if (!tree) return;
+      const cam = target.view.camera;
+      const side = 13;
+      const distance = Math.hypot(tree.x, tree.z) || 1;
+      // Stand on the far side, looking back toward the spawn: the reference sun rises behind that view,
+      // so the tree is front-lit instead of a silhouette.
+      const bx = (tree.x / distance) * side;
+      const bz = (tree.z / distance) * side;
+      cam.position.set(tree.x + bx + side * 0.4, tree.y + 3.2, tree.z + bz - side * 0.4);
+      cam.lookAt(tree.x, tree.y + 4.4, tree.z);
+      return;
+    }
     if (scene === 'sky') {
       const cam = target.view.camera;
       cam.position.set(pos.x, pos.y + 1.6, pos.z);
       cam.lookAt(pos.x, pos.y + 500, pos.z);
+      return;
+    }
+    if (scene === 'sun') {
+      // Stand at the waterline and look along the visible body's azimuth: the disc, the glint path and the
+      // near water in one frame. The body is high at noon, so the aim stays level and keeps the sea in view.
+      if (!shore) shore = findShore(target.terrain);
+      const cam = target.view.camera;
+      const px = shore.x - shore.nx * 1.5;
+      const pz = shore.z - shore.nz * 1.5;
+      const len = Math.hypot(body.x, body.z) || 1;
+      const bx = body.x / len;
+      const bz = body.z / len;
+      cam.position.set(px, target.terrain.heightAt(px, pz) + 1.6, pz);
+      cam.lookAt(px + bx * 200, cam.position.y + 0.4, pz + bz * 200);
+      return;
+    }
+    if (scene === 'shore' || scene === 'surf') {
+      if (!shore) shore = findShore(target.terrain);
+      const cam = target.view.camera;
+      // `surf`: stand at the waterline and look out to sea — the player's usual view of the breakers.
+      if (scene === 'surf') {
+        const px = shore.x - shore.nx * 5;
+        const pz = shore.z - shore.nz * 5;
+        cam.position.set(px, target.terrain.heightAt(px, pz) + 1.5, pz);
+        cam.lookAt(shore.x + shore.nx * 40, WATER_LEVEL + 0.3, shore.z + shore.nz * 40);
+        return;
+      }
+      // `shore`: look along the waterline, so the surf line runs diagonally through the frame.
+      const inland = 12;
+      const px = shore.x - shore.nx * inland;
+      const pz = shore.z - shore.nz * inland;
+      const tx = -shore.nz;
+      const tz = shore.nx;
+      cam.position.set(px, target.terrain.heightAt(px, pz) + 1.6, pz);
+      cam.lookAt(shore.x + tx * 30 + shore.nx * 10, WATER_LEVEL + 0.5, shore.z + tz * 30 + shore.nz * 10);
       return;
     }
     if (!ocean) ocean = findOcean(target.terrain);
@@ -202,8 +331,16 @@ export function createBench(options: BenchOptions = {}) {
     },
 
     /** Positions the camera for the current frame; call before `renderer.render`. */
-    placeCamera(pos: { x: number; y: number; z: number }): void {
-      placeCameraImpl(pos);
+    placeCamera(pos: { x: number; y: number; z: number }, body?: { x: number; y: number; z: number }): void {
+      placeCameraImpl(pos, body);
+    },
+
+    /**
+     * What the world streams and snaps around: the fixed camera, not the stationary player. A bench camera
+     * can stand hundreds of meters from the player; the water plane and the sun must follow the view.
+     */
+    get focus(): { x: number; y: number; z: number } {
+      return target ? target.view.camera.position : { x: 0, y: 0, z: 0 };
     },
 
     /** Called every frame after the render, with the frame's render cost and draw stats. */

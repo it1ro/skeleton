@@ -2,8 +2,6 @@ import {
   BufferAttribute,
   BufferGeometry,
   CanvasTexture,
-  ConeGeometry,
-  CylinderGeometry,
   Group,
   LinearFilter,
   LinearMipmapLinearFilter,
@@ -12,9 +10,17 @@ import {
   RepeatWrapping,
   SRGBColorSpace,
 } from 'three/webgpu';
-import { CHUNK_SEGMENTS, CHUNK_SIZE, type ScatterData } from '@skeleton/shared';
+import { CHUNK_SEGMENTS, CHUNK_SIZE, PROP_KINDS, TREE_KINDS, type ScatterData } from '@skeleton/shared';
 import { recordHitch } from '../bench/hitches.ts';
 import { composeInstance, InstancedPool, type PoolBlock } from './instanced-pool.ts';
+import {
+  createTreeGeometry,
+  createTreeMaterial,
+  treeVariantCount,
+  TREE_POOLS,
+  TREE_POOL_START,
+} from './trees.ts';
+import { createPropGeometry, createPropMaterial } from './props.ts';
 import type { ChunkData, WorkerRequest, WorkerResponse } from './terrain.worker.ts';
 
 const VIEW_RADIUS = 5; // chunks (~320 m): the far ring is fully fogged, so it is silhouette, not geometry
@@ -27,15 +33,32 @@ const MAX_LOADED_CHUNKS = (UNLOAD_RADIUS * 2 + 1) ** 2;
 /** `treesInChunk` attempts at most 70 trees per chunk (see shared/terrain.ts). */
 const TREES_PER_CHUNK = 70;
 const TREE_CAPACITY = MAX_LOADED_CHUNKS * TREES_PER_CHUNK;
+/** Погост props are bounded by the ~140 m radius around the spawn, far below the chunked trees. */
+const PROP_CAPACITY = 512;
+
+/**
+ * The grave mound is a unit hemisphere stretched wide and low: 4.2 half-widths and 2.6 heights per unit of the
+ * prop's scale. Callers that need to stand or sit beside a mound use the radius, not the raw scale.
+ */
+export const MOUND_RADIUS = 4.2;
+export const MOUND_HEIGHT = 2.6;
 
 interface Chunk {
   group: Group;
   ready: boolean;
-  /** Trunk/crown matrix block in world space; `null` when the chunk has no trees. */
-  trees: PoolBlock | null;
+  /** Per-kind tree matrix/color blocks in world space; `null` when the chunk has no trees. */
+  trees: PoolBlock[] | null;
+  /** Per-kind prop matrix/color blocks in world space; `null` when the chunk has no props. */
+  props: PoolBlock[] | null;
 }
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
+
+/** Deterministic 0..1 from a world position: per-tree color variation without extra wire data. */
+function hash01(x: number, z: number): number {
+  const v = Math.sin(x * 127.1 + z * 311.7) * 43758.5453;
+  return v - Math.floor(v);
+}
 
 function gridIndex(): Uint16Array {
   const n = CHUNK_SEGMENTS + 1;
@@ -113,12 +136,12 @@ export class ChunkManager {
     roughness: 1,
     metalness: 0,
   });
-  private readonly trunkGeometry = new CylinderGeometry(0.22, 0.35, 3, 6).translate(0, 1.5, 0);
-  private readonly crownGeometry = new ConeGeometry(1.9, 6, 7).translate(0, 5.5, 0);
-  private readonly trunkMaterial = new MeshStandardMaterial({ color: 0x5a3d26, roughness: 1 });
-  private readonly crownMaterial = new MeshStandardMaterial({ color: 0x2f5a2a, roughness: 1, flatShading: true });
-  private readonly trunkPool: InstancedPool;
-  private readonly crownPool: InstancedPool;
+  /** One instanced pool per tree kind; each is a single merged, vertex-colored geometry. */
+  private readonly treePools: InstancedPool[] = [];
+  /** Instances at the front of each sorted tree pool that lie within `shadowDistance`. */
+  private readonly treeCasters: number[] = [];
+  /** One instanced pool per prop kind (mound, cross, bone); order irrelevant, no shadow prefix. */
+  private readonly propPools: InstancedPool[] = [];
   private center = { cx: Number.NaN, cz: Number.NaN };
   private waiters: { radius: number; resolve: () => void }[] = [];
   private readonly queue: ChunkData[] = [];
@@ -126,31 +149,39 @@ export class ChunkManager {
   private streaming = false;
   /** Trees farther than this (chunk distance, meters) stay out of the shadow pass: they cannot reach the box. */
   private shadowDistance = Number.POSITIVE_INFINITY;
-  /** Instances at the front of the sorted tree pools that lie within `shadowDistance`; the shadow pass draws these. */
-  private casters = Number.POSITIVE_INFINITY;
   /** Scatter requests in flight per worker; at most one, and only while the worker has no pending chunk. */
   private readonly scatterBusy: number[] = [];
   private scatterSource: (() => [number, number, number] | null) | null = null;
   private scatterSink: ((data: ScatterData) => void) | null = null;
 
   constructor(private readonly seed: number) {
-    this.trunkPool = new InstancedPool(this.trunkGeometry, this.trunkMaterial, TREE_CAPACITY, false);
-    this.crownPool = new InstancedPool(this.crownGeometry, this.crownMaterial, TREE_CAPACITY, false);
-    this.trunkPool.mesh.castShadow = true;
-    this.trunkPool.mesh.receiveShadow = true;
-    this.crownPool.mesh.castShadow = true;
-    this.crownPool.mesh.receiveShadow = true;
-    // The pools hold every loaded tree; the shadow pass draws only the near prefix (`casters`), because a tree
-    // outside the shadow box cannot cast into it. These hooks bracket that one render, so the color pass draws all.
-    for (const pool of [this.trunkPool, this.crownPool]) {
+    const treeMaterial = createTreeMaterial();
+    TREE_POOLS.forEach(({ kind, variant }, index) => {
+      const pool = new InstancedPool(createTreeGeometry(kind, variant), treeMaterial, TREE_CAPACITY, true);
+      this.treePools.push(pool);
+      this.treeCasters.push(Number.POSITIVE_INFINITY);
+      pool.mesh.castShadow = true;
+      pool.mesh.receiveShadow = true;
+      // The pools hold every loaded tree; the shadow pass draws only the near prefix, because a tree outside
+      // the shadow box cannot cast into it. These hooks bracket that one render, so the color pass draws all.
       pool.mesh.onBeforeShadow = () => {
-        pool.mesh.count = Math.min(this.casters, pool.count);
+        pool.mesh.count = Math.min(this.treeCasters[index], pool.count);
       };
       pool.mesh.onAfterShadow = () => {
         pool.mesh.count = pool.count;
       };
-    }
-    this.root.add(this.trunkPool.mesh, this.crownPool.mesh);
+      this.root.add(pool.mesh);
+    });
+
+    const propMaterial = createPropMaterial();
+    PROP_KINDS.forEach((kind) => {
+      const pool = new InstancedPool(createPropGeometry(kind), propMaterial, PROP_CAPACITY, true);
+      // Mounds and crosses cast; bones only receive (they are small, near-ground detail).
+      pool.mesh.castShadow = kind !== 'bone';
+      pool.mesh.receiveShadow = true;
+      this.propPools.push(pool);
+      this.root.add(pool.mesh);
+    });
 
     for (let w = 0; w < WORKERS; w++) {
       const worker = new Worker(new URL('./terrain.worker.ts', import.meta.url), { type: 'module' });
@@ -222,7 +253,10 @@ export class ChunkManager {
 
   /** Tree instances the shadow pass draws: the near prefix of the pools, not every loaded tree. */
   get shadowCasters(): number {
-    return Math.min(this.casters, this.trunkPool.count);
+    return this.treePools.reduce(
+      (sum, pool, index) => sum + Math.min(this.treeCasters[index], pool.count),
+      0,
+    );
   }
 
   update(x: number, z: number): void {
@@ -242,6 +276,7 @@ export class ChunkManager {
     this.pump();
     // Re-sort on every chunk move: the shadow pass draws the near prefix of the pools, so the order matters.
     this.rewriteTrees();
+    this.rewriteProps();
   }
 
   /** Builds one queued chunk per frame, nearest first: a chunk boundary no longer lands in a single frame. */
@@ -278,7 +313,7 @@ export class ChunkManager {
       const w = this.busy.indexOf(Math.min(...this.busy));
       if (this.busy[w] >= IN_FLIGHT_PER_WORKER) break;
       this.busy[w]++;
-      this.chunks.set(key(x, z), { group: new Group(), ready: false, trees: null });
+      this.chunks.set(key(x, z), { group: new Group(), ready: false, trees: null, props: null });
       const req: WorkerRequest = { type: 'chunk', seed: this.seed, cx: x, cz: z };
       this.workers[w].postMessage(req);
     }
@@ -323,21 +358,86 @@ export class ChunkManager {
     ground.receiveShadow = true;
     chunk.group.add(ground);
 
-    const count = data.trees.length / 5;
+    const count = data.trees.length / 6;
     if (count > 0) {
-      const matrix = new Float32Array(count * 16);
       const ox = data.cx * CHUNK_SIZE;
       const oz = data.cz * CHUNK_SIZE;
+      const byPool: number[][] = TREE_POOLS.map(() => []);
       for (let i = 0; i < count; i++) {
-        const [x, y, z, s, r] = data.trees.subarray(i * 5, i * 5 + 5);
-        composeInstance(matrix, i, x + ox, y - 0.3, z + oz, r, s);
+        const base = i * 6;
+        const kind = data.trees[base + 5] | 0;
+        const x = data.trees[base];
+        const z = data.trees[base + 2];
+        const variant = Math.floor(hash01(x, z) * treeVariantCount(TREE_KINDS[kind]));
+        byPool[TREE_POOL_START[kind] + variant].push(i);
       }
-      const trees: PoolBlock = { matrix, color: null };
-      chunk.trees = trees;
-      this.trunkPool.append(trees);
-      this.crownPool.append(trees);
+      const blocks = byPool.map((indices) => {
+        const matrix = new Float32Array(indices.length * 16);
+        const color = new Float32Array(indices.length * 3);
+        indices.forEach((tree, at) => {
+          const base = tree * 6;
+          const x = data.trees[base];
+          const y = data.trees[base + 1];
+          const z = data.trees[base + 2];
+          const scale = data.trees[base + 3];
+          const rotation = data.trees[base + 4];
+          // Three independent sizes: footprint from the wire scale, height and width by hashes.
+          const height = scale * (0.85 + hash01(z, x) * 0.4);
+          const spreadX = scale * (0.88 + hash01(x + 3.1, z) * 0.24);
+          const spreadZ = scale * (0.88 + hash01(x, z + 5.7) * 0.24);
+          // No trunk stands plumb: a degree or two of lean, planted at the same base point.
+          const tiltX = (hash01(x + 11.3, z) - 0.5) * 0.11;
+          const tiltZ = (hash01(x, z + 7.7) - 0.5) * 0.11;
+          composeInstance(matrix, at, x + ox, y - 0.35, z + oz, rotation, spreadX, height, spreadZ, tiltX, tiltZ);
+          const tint = 0.9 + hash01(x, z) * 0.2;
+          // A hint of hue drift: some trees yellow, some blue-green, none of them the same.
+          color[at * 3] = tint * (0.97 + hash01(x + 1.7, z + 2.3) * 0.06);
+          color[at * 3 + 1] = tint;
+          color[at * 3 + 2] = tint * (0.94 + hash01(z + 4.1, x + 5.9) * 0.08);
+        });
+        return { matrix, color };
+      });
+      chunk.trees = blocks;
+      blocks.forEach((block, index) => this.treePools[index].append(block));
       // Appends land at the end, so a chunk built inside the shadow box has to be sorted into the prefix.
       if (this.withinShadow(data.cx, data.cz)) this.rewriteTrees();
+    }
+
+    const propCount = data.props.length / 6;
+    if (propCount > 0) {
+      const ox = data.cx * CHUNK_SIZE;
+      const oz = data.cz * CHUNK_SIZE;
+      const byKind: number[][] = PROP_KINDS.map(() => []);
+      for (let i = 0; i < propCount; i++) {
+        byKind[data.props[i * 6 + 5] | 0].push(i);
+      }
+      const blocks = byKind.map((indices, kind) => {
+        const matrix = new Float32Array(indices.length * 16);
+        const color = new Float32Array(indices.length * 3);
+        const propKind = PROP_KINDS[kind];
+        indices.forEach((prop, at) => {
+          const base = prop * 6;
+          const x = data.props[base];
+          const y = data.props[base + 1];
+          const z = data.props[base + 2];
+          const scale = data.props[base + 3];
+          const rotation = data.props[base + 4];
+          if (propKind === 'mound') {
+            // A wide, low hill: the geometry is a unit hemisphere, sized and sunk so the skirt meets the ground.
+            composeInstance(matrix, at, x + ox, y - 0.3, z + oz, rotation, MOUND_RADIUS * scale, MOUND_HEIGHT * scale);
+          } else {
+            // Crosses and bones carry real proportions in the geometry; uniform scale only.
+            composeInstance(matrix, at, x + ox, y, z + oz, rotation, scale);
+          }
+          const tint = 0.9 + hash01(x, z) * 0.2;
+          color[at * 3] = tint;
+          color[at * 3 + 1] = tint;
+          color[at * 3 + 2] = tint;
+        });
+        return { matrix, color };
+      });
+      chunk.props = blocks;
+      blocks.forEach((block, kind) => this.propPools[kind].append(block));
     }
 
     chunk.group.position.set(data.cx * CHUNK_SIZE, 0, data.cz * CHUNK_SIZE);
@@ -375,21 +475,33 @@ export class ChunkManager {
    */
   private rewriteTrees(): void {
     const { cx, cz } = this.center;
-    const chunks: { distance: number; trees: PoolBlock }[] = [];
+    const chunks: { distance: number; blocks: PoolBlock[] }[] = [];
     for (const [k, chunk] of this.chunks) {
       if (!chunk.trees) continue;
       const [x, z] = k.split(',').map(Number);
       const distance = Number.isFinite(cx) ? Math.max(Math.abs(x - cx), Math.abs(z - cz)) * CHUNK_SIZE : 0;
-      chunks.push({ distance, trees: chunk.trees });
+      chunks.push({ distance, blocks: chunk.trees });
     }
     chunks.sort((a, b) => a.distance - b.distance);
-    const blocks = chunks.map((chunk) => chunk.trees);
-    this.trunkPool.rewrite(blocks);
-    this.crownPool.rewrite(blocks);
-    this.casters = 0;
+    this.treePools.forEach((pool, index) => {
+      pool.rewrite(chunks.map((chunk) => chunk.blocks[index]));
+      this.treeCasters[index] = 0;
+    });
     for (const chunk of chunks) {
       if (chunk.distance > this.shadowDistance) break;
-      this.casters += chunk.trees.matrix.length / 16;
+      this.treePools.forEach((_, index) => {
+        this.treeCasters[index] += chunk.blocks[index].matrix.length / 16;
+      });
     }
+  }
+
+  /** Rewrites the prop pools compactly. Order is irrelevant (no shadow prefix), so it only compacts. */
+  private rewriteProps(): void {
+    const blocks: PoolBlock[][] = this.propPools.map(() => []);
+    for (const chunk of this.chunks.values()) {
+      if (!chunk.props) continue;
+      chunk.props.forEach((block, kind) => blocks[kind].push(block));
+    }
+    this.propPools.forEach((pool, kind) => pool.rewrite(blocks[kind]));
   }
 }

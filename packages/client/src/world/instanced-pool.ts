@@ -1,5 +1,6 @@
 import {
   Color,
+  Euler,
   InstancedMesh,
   Matrix4,
   Quaternion,
@@ -10,12 +11,17 @@ import {
 
 const _matrix = new Matrix4();
 const _quaternion = new Quaternion();
+const _euler = new Euler(0, 0, 0, 'YXZ');
 const _position = new Vector3();
 const _scale = new Vector3();
 const _up = new Vector3(0, 1, 0);
 const _white = new Color(1, 1, 1);
 
-/** Composes a world-space instance matrix (translation, Y-rotation, uniform scale) into `out` at instance `at`. */
+/**
+ * Composes a world-space instance matrix (translation, yaw, non-uniform scale, optional lean) into
+ * `out` at instance `at`. X and Z scale separately, so a tree can be broad one way and narrow the other;
+ * `tiltX`/`tiltZ` lean it a couple of degrees off plumb the way real trunks stand.
+ */
 export function composeInstance(
   out: Float32Array,
   at: number,
@@ -23,11 +29,16 @@ export function composeInstance(
   y: number,
   z: number,
   rotation: number,
-  scale: number,
+  scaleX: number,
+  scaleY: number = scaleX,
+  scaleZ: number = scaleX,
+  tiltX = 0,
+  tiltZ = 0,
 ): void {
   _position.set(x, y, z);
-  _quaternion.setFromAxisAngle(_up, rotation);
-  _scale.setScalar(scale);
+  if (tiltX === 0 && tiltZ === 0) _quaternion.setFromAxisAngle(_up, rotation);
+  else _quaternion.setFromEuler(_euler.set(tiltX, rotation, tiltZ, 'YXZ'));
+  _scale.set(scaleX, scaleY, scaleZ);
   _matrix.compose(_position, _quaternion, _scale);
   out.set(_matrix.elements, at * 16);
 }

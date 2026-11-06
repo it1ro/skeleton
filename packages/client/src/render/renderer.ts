@@ -10,6 +10,8 @@ export interface View {
   camera: PerspectiveCamera;
   backend: 'WebGPU' | 'WebGL2';
   togglePixels(): void;
+  /** Turns the pixel look on or off explicitly (idempotent); `togglePixels` flips it. */
+  setPixels(on: boolean): void;
   /** Sets the final output node (color curve). Applied inline, so there is no extra framebuffer. */
   setOutputNode(node: Node): void;
   /** Renders through the pipeline that folds the output node into the material shaders. */
@@ -26,7 +28,8 @@ export async function createView(canvas: HTMLCanvasElement): Promise<View> {
 
   const scene = new Scene();
   const camera = new PerspectiveCamera(65, 1, 0.1, 1000);
-  let pixels = true;
+  /** The pixel look is opt-in: full resolution by default, half-resolution behind the P key. */
+  let pixels = false;
 
   // Tone mapping, color space and the color curve are applied inline in the material shaders,
   // instead of the renderer's intermediate framebuffer + output pass.
@@ -50,6 +53,11 @@ export async function createView(canvas: HTMLCanvasElement): Promise<View> {
     backend,
     togglePixels() {
       pixels = !pixels;
+      resize();
+    },
+    setPixels(on: boolean) {
+      if (pixels === on) return;
+      pixels = on;
       resize();
     },
     setOutputNode(node) {

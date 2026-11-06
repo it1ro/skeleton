@@ -1,5 +1,6 @@
+import { BIOMES, type Biome } from './biomes.ts';
 import { hash3, mulberry32 } from './rng.ts';
-import type { Terrain } from './terrain.ts';
+import type { BiomeBlend, Terrain } from './terrain.ts';
 
 /** Square scatter tile in meters. The field covers a ring of tiles around the player and follows them. */
 export const SCATTER_TILE = 16;
@@ -27,6 +28,20 @@ export interface ScatterData {
   tz: number;
   grass: ScatterBlock;
   flowers: ScatterBlock;
+}
+
+/** Deterministic 0..1 hash of a world position, for thinning interior tufts without touching the RNG. */
+function hash01(x: number, z: number): number {
+  const s = Math.sin(x * 127.1 + z * 311.7) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+/** 0..1: how much of this scatter a point grows, blended across the feathered soil edge. */
+function growth(blend: BiomeBlend, flower: boolean): number {
+  const share = (biome: Biome): number =>
+    (flower ? BIOMES[biome].scatter.flowers : BIOMES[biome].scatter.grass) ? 1 : 0;
+  const own = share(blend.biome);
+  return own + (share(blend.mixWith) - own) * blend.mix;
 }
 
 /** sRGB→linear transfer, bit-identical to three.js `ColorManagement.SRGBToLinear`. */
@@ -113,6 +128,7 @@ function scatterOne(
   const keep = spec.keep * density;
   let n = 0;
   const rnd = mulberry32(hash3(tx, tz, seed ^ spec.salt));
+  const blend: BiomeBlend = { biome: 'meadows', mixWith: 'meadows', mix: 0 };
   for (let j = 0; j < perSide; j++) {
     for (let i = 0; i < perSide; i++) {
       const x = ox + (i + rnd()) * spec.step;
@@ -120,7 +136,11 @@ function scatterOne(
       if (rnd() > keep) continue;
       if (spec.flower && Math.sin(x * 0.11) + Math.cos(z * 0.09) < 0.2) continue;
       const h = terrain.heightAt(x, z);
-      if (terrain.biomeAt(x, z, h) !== 'meadows') continue;
+      terrain.biomeBlendAt(x, z, blend, h);
+      const grow = growth(blend, spec.flower);
+      if (grow <= 0) continue;
+      // Thin tufts inside the edge by a position hash, not by the RNG: the interior stays bit-identical.
+      if (grow < 1 && hash01(x, z) >= grow) continue;
       const rotation = rnd() * Math.PI * 2;
       const scale = spec.flower ? 1 + rnd() * 0.6 : 0.7 + rnd() * 1.0;
       const shade = rnd();

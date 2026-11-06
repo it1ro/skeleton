@@ -35,14 +35,16 @@ const GOLDEN = {
       flowerColorHash: 'ae4a5aae25aa9712a3b92fbac47cc71524007e82b680a6e0c60239860f5996ab',
     },
     {
+      // The forest edge starts ~6 m north of spawn, so this tile is the only golden tile that changed:
+      // the feathered edge thins six tufts. Tiles 0,0 and 1,0 are bit-identical to the old placement.
       tx: 0,
       tz: -1,
-      grassCount: 445,
+      grassCount: 451,
       flowerCount: 52,
-      grassMatrixHash: '536be12cb9c337c8a1860f7e9c606d66d0c44fed09417a432b1a8d95219d183f',
-      grassColorHash: '087cc21609726d531649ae5d4e638d00711fbbc95e8e50ad8870590f68c99a1b',
-      flowerMatrixHash: 'c6358782de378d8533af2151348c45f1d1eb027f0b397c5330e86497e8fdce5c',
-      flowerColorHash: '34d65d5ae06341ae35f99aa0103570bf63bd3f7f7e3abf5a843d9f1bd0296e3b',
+      grassMatrixHash: '9f0936514c7a0035897c69580a1dd9e0a14e30d2c4a553103b23453f5321b687',
+      grassColorHash: 'e8c9a3f59cca3653f9a5121e0a5f1faf1a4de211bc91aa88e85d4eb2990272c2',
+      flowerMatrixHash: '5bcde144e65a929b2f26a5669184b6777aaa2e0674f2e75d608894426f2f38f0',
+      flowerColorHash: 'ab9891515d149165fcc1bf5f199c4ceac0e8c8789b29b3c8adf42bc25e28cb5b',
     },
   ],
 };

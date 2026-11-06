@@ -18,6 +18,17 @@
           <button type="button" data-skeleton="m" aria-pressed="true">Мужчина</button>
           <button type="button" data-skeleton="f" aria-pressed="false">Женщина</button>
         </div>
+        <fieldset id="sound">
+          <legend>Звук</legend>
+          <label>Музыка <input id="level-score" type="range" min="0" max="1" step="0.05" /></label>
+          <label>Мир <input id="level-world" type="range" min="0" max="1" step="0.05" /></label>
+          <label>Голоса <input id="level-head" type="range" min="0" max="1" step="0.05" /></label>
+          <label>Общая <input id="level-master" type="range" min="0" max="1" step="0.05" /></label>
+          <div class="checks">
+            <label><input id="level-eq" type="checkbox" checked /> EQ</label>
+            <label><input id="level-mute" type="checkbox" /> Тишина</label>
+          </div>
+        </fieldset>
         <button type="submit">Играть</button>
         <p id="status"></p>
         <p class="help">WASD — ходьба · Shift — бег · Space — прыжок · мышь — камера · колесо — зум · P — пиксели · E — говорить · Esc — меню</p>
