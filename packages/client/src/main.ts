@@ -18,6 +18,18 @@ import { loadWaterField } from './render/water-field-source.ts';
 import { startTelemetry } from './telemetry/telemetry.ts';
 import { Mixer, type AudioDebug, type LevelsPatch } from './audio/mixer.ts';
 import { startWind } from './audio/wind.ts';
+import { Music, type MusicDebug } from './audio/music.ts';
+import {
+  BANYA_ENTER,
+  GuardScene,
+  MusicZones,
+  cycleTrackAt,
+  isMusicTrack,
+  parseMusicMode,
+  pickTrack,
+  type MusicMode,
+  type MusicTrack,
+} from './audio/selection.ts';
 import type { AudioLevels } from './audio/levels.ts';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
@@ -89,6 +101,11 @@ const bench =
 
 // `?audio=0` disables sound, and the bench never creates it: the reference run measures the frame, not the mix.
 const audio = !bench && params.get('audio') !== '0' ? new Mixer() : null;
+const music = audio ? new Music(audio) : null;
+const eqParam = params.get('eq');
+if (eqParam === '0' || eqParam === 'off') music?.setEq(false);
+let musicMode: MusicMode = parseMusicMode(params.get('music'));
+let musicCycleStart = performance.now();
 
 declare global {
   interface Window {
@@ -104,14 +121,97 @@ declare global {
       set: (patch: LevelsPatch) => AudioLevels | null;
       mute: (on?: boolean) => AudioLevels | null;
     };
+    /** Console handle for the score: `__music.state()`, `__music.play('banya')`, `__music.auto()`, `__music.off()`. */
+    __music?: {
+      state: () => (MusicDebug & { mode: MusicMode }) | null;
+      play: (track: MusicTrack) => MusicTrack | null;
+      auto: () => MusicMode;
+      cycle: () => MusicMode;
+      off: () => MusicMode;
+      eq: (on?: boolean) => boolean;
+      navь: (depth?: number) => number;
+    };
   }
 }
 
 window.__audio = {
   state: () => audio?.debug() ?? null,
-  set: (patch) => audio?.setLevels(patch) ?? null,
-  mute: (on = true) => audio?.setMuted(on) ?? null,
+  set: (patch) => {
+    const next = audio?.setLevels(patch) ?? null;
+    if (next) showLevels(next);
+    return next;
+  },
+  mute: (on = true) => {
+    const next = audio?.setMuted(on) ?? null;
+    if (next) showLevels(next);
+    return next;
+  },
 };
+window.__music = {
+  state: () => (music ? { ...music.debug(), mode: musicMode } : null),
+  play: (track) => {
+    if (!isMusicTrack(track)) return null;
+    musicMode = track;
+    music?.setTrack(track, true);
+    return track;
+  },
+  auto: () => {
+    musicMode = 'auto';
+    return musicMode;
+  },
+  cycle: () => {
+    musicMode = 'cycle';
+    musicCycleStart = performance.now();
+    return musicMode;
+  },
+  off: () => {
+    musicMode = 'off';
+    music?.setTrack(null);
+    return musicMode;
+  },
+  eq: (on = true) => {
+    music?.setEq(on);
+    const value = music?.debug().eq ?? false;
+    showEq(value);
+    return value;
+  },
+  navь: (depth) => {
+    if (depth !== undefined) music?.setNavь(depth);
+    return music?.debug().navь ?? 0;
+  },
+};
+
+const LEVEL_KEYS = ['master', 'world', 'head', 'score'] as const;
+const soundPanel = document.getElementById('sound') as HTMLFieldSetElement | null;
+const levelInputs = Object.fromEntries(
+  LEVEL_KEYS.map((key) => [key, document.getElementById(`level-${key}`) as HTMLInputElement]),
+) as Record<(typeof LEVEL_KEYS)[number], HTMLInputElement>;
+const eqInput = document.getElementById('level-eq') as HTMLInputElement;
+const muteInput = document.getElementById('level-mute') as HTMLInputElement;
+
+function showLevels(levels: AudioLevels): void {
+  for (const key of LEVEL_KEYS) levelInputs[key].value = String(levels[key]);
+  muteInput.checked = levels.muted;
+}
+
+function showEq(on: boolean): void {
+  eqInput.checked = on;
+}
+
+if (!audio) {
+  if (soundPanel) soundPanel.hidden = true;
+} else {
+  showLevels(audio.getLevels());
+  showEq(music?.debug().eq ?? true);
+  for (const key of LEVEL_KEYS) {
+    const input = levelInputs[key];
+    input.addEventListener('input', () => {
+      audio.setLevels({ [key]: input.valueAsNumber } as LevelsPatch);
+    });
+  }
+  muteInput.addEventListener('change', () => audio.setMuted(muteInput.checked));
+  eqInput.addEventListener('change', () => music?.setEq(eqInput.checked));
+}
 try {
   nameInput.value = localStorage.getItem(NAME_KEY) ?? '';
 } catch {
@@ -179,6 +279,7 @@ form.addEventListener('submit', (e) => {
   e.preventDefault();
   // Browsers only start audio inside a gesture; the Play button is that gesture.
   audio?.unlock();
+  music?.unlock();
   input.lock();
   if (started) return;
   started = true;
@@ -267,6 +368,8 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
   // The sleeping guard at the foot of the barrow the first frame looks at: static, the pose is baked into the mesh.
   const spot = guardSpot(mound);
   new Neodobudka(terrain, scene, spot.x, spot.z);
+  const zones = new MusicZones();
+  const guardScene = new GuardScene();
   // The single context and the head bus for Повитуха; without sound the panel keeps its own.
   const audioContext = sound?.audioContext ?? null;
   const audioHead = sound?.head ?? null;
@@ -289,6 +392,8 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
   document.body.append(talkPrompt);
 
   loaded = true;
+  musicCycleStart = performance.now();
+  if (musicMode !== 'off') music?.prefetch(['banya', 'nedobudka', 'nedobudka-wake']);
   status.textContent = '';
   nameInput.hidden = true;
   form.querySelector('button[type="submit"]')!.textContent = 'Продолжить';
@@ -346,8 +451,14 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
     povituha.update(dt);
     povituha.look(pos.x, pos.z, dt);
     prevPos = pos;
+    const biome = terrain.biomeAt(pos.x, pos.z);
+    // Fog is about the view, not the avatar: from the beach the sea must not drown in meadow fog.
+    const viewBiome = terrain.biomeAt(camera.position.x, camera.position.z);
+    const guardDistance = Math.hypot(pos.x - spot.x, pos.z - spot.z);
+    const banyaDistance = povituha.distanceTo(pos.x, pos.z);
+    zones.update(dt, guardDistance, banyaDistance, dialogueOpen);
 
-    const near = povituha.distanceTo(pos.x, pos.z) < 3.6;
+    const near = banyaDistance < BANYA_ENTER;
     talkPrompt.classList.toggle('hidden', !near || talk.isOpen);
     if (near && !talk.isOpen && input.consume('KeyE')) {
       dialogueOpen = true;
@@ -356,6 +467,21 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
       povituha.setTalking(true);
       talk.open();
     }
+
+    if (musicMode !== 'auto') guardScene.reset();
+    const guard = musicMode === 'auto' ? guardScene.update(zones.nearGuard, guardDistance) : null;
+    if (guard?.wake) music?.playCue('nedobudka-wake', () => guardScene.wakeEnded());
+    const musicTrack =
+      guard?.silence === true
+        ? null
+        : (guard?.override ??
+          pickTrack(
+            musicMode,
+            { biome, nearGuard: zones.nearGuard, nearBanya: dialogueOpen || zones.nearBanya },
+            musicMode === 'cycle' ? cycleTrackAt((now - musicCycleStart) / 1000) : undefined,
+          ));
+    music?.setTrack(musicTrack);
+    music?.setDucked(dialogueOpen);
 
     if (!bench && now - introStart < INTRO_MS) {
       // Scripted first frame: camera at 30 cm, looking at the landmark through the low fog.
@@ -368,8 +494,6 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
     bench?.placeCamera(pos);
     chunks.update(pos.x, pos.z);
     grass.update(pos.x, pos.z);
-    // Fog is about the view, not the avatar: from the beach the sea must not drown in meadow fog.
-    const viewBiome = terrain.biomeAt(camera.position.x, camera.position.z);
     env.update(serverTick, pos.x, pos.y, pos.z, viewBiome);
     remotes.update(serverTick, dt, camera, window.innerWidth, window.innerHeight);
     me.updateLabel(camera, window.innerWidth, window.innerHeight);
@@ -396,7 +520,7 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
         triangles: renderer.info.render.triangles,
         x: pos.x,
         z: pos.z,
-        biome: terrain.biomeAt(pos.x, pos.z),
+        biome,
         speed: local.speed,
       });
       telemetry.frame(now, dt);
@@ -411,7 +535,7 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
       hud.textContent = [
         `${fps} fps · ${view.backend}${conn.open ? '' : ' · НЕТ СВЯЗИ'}`,
         `онлайн: ${remotes.count + 1} · ${env.clock}`,
-        `x ${pos.x.toFixed(0)} y ${pos.y.toFixed(1)} z ${pos.z.toFixed(0)} · ${terrain.biomeAt(pos.x, pos.z)}`,
+        `x ${pos.x.toFixed(0)} y ${pos.y.toFixed(1)} z ${pos.z.toFixed(0)} · ${biome}`,
         `чанки: ${chunks.loaded} · seed ${seed}`,
       ].join('\n');
     }
