@@ -157,7 +157,7 @@ export class ChunkManager {
   constructor(private readonly seed: number) {
     const treeMaterial = createTreeMaterial();
     TREE_POOLS.forEach(({ kind, variant }, index) => {
-      const pool = new InstancedPool(createTreeGeometry(kind, variant), treeMaterial, TREE_CAPACITY, true);
+      const pool = new InstancedPool(createTreeGeometry(kind, variant), treeMaterial, TREE_CAPACITY, true, true);
       this.treePools.push(pool);
       this.treeCasters.push(Number.POSITIVE_INFINITY);
       pool.mesh.castShadow = true;
@@ -371,9 +371,12 @@ export class ChunkManager {
         const variant = Math.floor(hash01(x, z) * treeVariantCount(TREE_KINDS[kind]));
         byPool[TREE_POOL_START[kind] + variant].push(i);
       }
-      const blocks = byPool.map((indices) => {
+      const blocks = byPool.map((indices, index) => {
         const matrix = new Float32Array(indices.length * 16);
         const color = new Float32Array(indices.length * 3);
+        const wind = new Float32Array(indices.length * 4);
+        // The geometry's own height, so the per-instance amplitude follows the tree's real size.
+        const top = this.treePools[index].mesh.geometry.userData.top as number;
         indices.forEach((tree, at) => {
           const base = tree * 6;
           const x = data.trees[base];
@@ -394,8 +397,14 @@ export class ChunkManager {
           color[at * 3] = tint * (0.97 + hash01(x + 1.7, z + 2.3) * 0.06);
           color[at * 3 + 1] = tint;
           color[at * 3 + 2] = tint * (0.94 + hash01(z + 4.1, x + 5.9) * 0.08);
+          // Wind: base (a gust reaches the whole crown at once), a phase stable across chunk rewrites,
+          // and the world height the shader scales the sway by.
+          wind[at * 4] = x + ox;
+          wind[at * 4 + 1] = z + oz;
+          wind[at * 4 + 2] = hash01(x + 41.7, z + 13.1) * Math.PI * 2;
+          wind[at * 4 + 3] = top * height;
         });
-        return { matrix, color };
+        return { matrix, color, wind };
       });
       chunk.trees = blocks;
       blocks.forEach((block, index) => this.treePools[index].append(block));

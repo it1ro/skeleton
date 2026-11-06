@@ -5,8 +5,8 @@ import type { ChunkManager } from '../world/chunks.ts';
 import { frameStats, type FrameStats } from './stats.ts';
 import { takeHitches, type Hitch } from './hitches.ts';
 
-/** Where the fixed camera looks: the spawn meadow, a nearby tree, open water, or up at the sky. */
-export type BenchSceneKind = 'spawn' | 'trees' | 'water' | 'sky';
+/** Where the fixed camera looks: the spawn meadow, a nearby tree, a hillside tree, open water, or up at the sky. */
+export type BenchSceneKind = 'spawn' | 'trees' | 'hill' | 'water' | 'sky';
 
 export interface BenchOptions {
   seconds?: number;
@@ -89,6 +89,25 @@ function findTree(terrain: Terrain): { x: number; y: number; z: number } | null 
           bestScore = score;
           best = { x: spot.x, y: spot.y, z: spot.z };
         }
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * The highest tree within reach, for the `hill` scene. The old wind grew with world height, so a slope
+ * was exactly where trunks walked: a 38 m tree dragged its root 3.6 m across the ground.
+ */
+function findHighTree(terrain: Terrain): { x: number; y: number; z: number } | null {
+  let best: { x: number; y: number; z: number } | null = null;
+  let bestY = 24;
+  for (let cx = -4; cx <= 4; cx++) {
+    for (let cz = -4; cz <= 4; cz++) {
+      for (const spot of terrain.treesInChunk(cx, cz)) {
+        if (spot.y <= bestY) continue;
+        bestY = spot.y;
+        best = { x: spot.x, y: spot.y, z: spot.z };
       }
     }
   }
@@ -184,9 +203,9 @@ export function createBench(options: BenchOptions = {}) {
   /** Positions the camera for the current frame for `water` and `sky`; `spawn` goes through the orbit. */
   function placeCameraImpl(pos: { x: number; y: number; z: number }): void {
     if (!target || scene === 'spawn') return;
-    if (scene === 'trees') {
+    if (scene === 'trees' || scene === 'hill') {
       if (!treeSearched) {
-        tree = findTree(target.terrain);
+        tree = scene === 'hill' ? findHighTree(target.terrain) : findTree(target.terrain);
         treeSearched = true;
       }
       if (!tree) return;

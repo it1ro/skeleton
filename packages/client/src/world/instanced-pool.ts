@@ -1,6 +1,7 @@
 import {
   Color,
   Euler,
+  InstancedBufferAttribute,
   InstancedMesh,
   Matrix4,
   Quaternion,
@@ -49,6 +50,12 @@ export interface PoolBlock {
   matrix: Float32Array;
   /** 3 floats per instance; `null` when the material has no per-instance color. */
   color: Float32Array | null;
+  /**
+   * 4 floats per instance for the wind: base x, base z, phase and world height. Omitted by pools whose
+   * material does not read wind (props). The base is what the shader cannot recover from the world
+   * position after instancing, and the phase must not come from `instanceIndex`, which chunk rewrites.
+   */
+  wind?: Float32Array | null;
 }
 
 /**
@@ -60,9 +67,11 @@ export class InstancedPool {
   readonly mesh: InstancedMesh;
   readonly matrix: Float32Array;
   readonly color: Float32Array | null;
+  readonly wind: Float32Array | null;
+  private readonly windAttribute: InstancedBufferAttribute | null;
   private used = 0;
 
-  constructor(geometry: BufferGeometry, material: Material, capacity: number, colored: boolean) {
+  constructor(geometry: BufferGeometry, material: Material, capacity: number, colored: boolean, windy = false) {
     this.mesh = new InstancedMesh(geometry, material, capacity);
     this.matrix = this.mesh.instanceMatrix.array as Float32Array;
     if (colored) {
@@ -71,6 +80,14 @@ export class InstancedPool {
       this.color = this.mesh.instanceColor!.array as Float32Array;
     } else {
       this.color = null;
+    }
+    if (windy) {
+      this.wind = new Float32Array(capacity * 4);
+      this.windAttribute = new InstancedBufferAttribute(this.wind, 4);
+      this.mesh.geometry.setAttribute('treeWind', this.windAttribute);
+    } else {
+      this.wind = null;
+      this.windAttribute = null;
     }
     // One mesh spans the whole world; per-instance frustum culling is not worth it here.
     this.mesh.frustumCulled = false;
@@ -97,6 +114,11 @@ export class InstancedPool {
       this.mesh.instanceColor!.addUpdateRange(start * 3, instances * 3);
       this.mesh.instanceColor!.needsUpdate = true;
     }
+    if (this.wind && block.wind) {
+      this.wind.set(block.wind, start * 4);
+      this.windAttribute!.addUpdateRange(start * 4, instances * 4);
+      this.windAttribute!.needsUpdate = true;
+    }
   }
 
   /** Rewrites the whole buffer from an ordered list of blocks and schedules a full GPU upload. */
@@ -117,6 +139,11 @@ export class InstancedPool {
       this.mesh.instanceColor!.clearUpdateRanges();
       this.mesh.instanceColor!.addUpdateRange(0, used * 3);
       this.mesh.instanceColor!.needsUpdate = true;
+    }
+    if (this.wind) {
+      this.windAttribute!.clearUpdateRanges();
+      this.windAttribute!.addUpdateRange(0, used * 4);
+      this.windAttribute!.needsUpdate = true;
     }
   }
 }

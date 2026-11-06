@@ -13,8 +13,10 @@ import {
   OctahedronGeometry,
   MeshStandardNodeMaterial,
 } from 'three/webgpu';
-import { Fn, float, instanceIndex, positionLocal, sin, time, uniform, vec3 } from 'three/tsl';
+import { Fn, attribute, float, positionLocal, sin, vec3 } from 'three/tsl';
 import { TREE_KINDS, type TreeKind } from '@skeleton/shared';
+import { bendWeight } from './tree-bend.ts';
+import { TREE_SWAY, WIND_CLOCK, WIND_DIRECTION, WIND_STRENGTH } from './wind.ts';
 
 export type Rgb = [number, number, number];
 export type ColorFn = (x: number, y: number, z: number) => Rgb;
@@ -568,11 +570,31 @@ export function treeVariantCount(kind: TreeKind): number {
   return kind === 'dead' ? DEAD_VARIANTS.length : kind === 'birch' ? BIRCH_VARIANTS.length : SPRUCE_VARIANTS.length;
 }
 
+/** How the kinds answer the wind: a birch whips, a spruce holds, dead wood barely moves. */
+export const TREE_STIFFNESS: Record<TreeKind, number> = { spruce: 0.85, birch: 1.15, dead: 0.55 };
+
+/**
+ * Bakes the bend weight into the geometry and remembers its own height. The weight is measured from the
+ * tree's base, not from the world: after instancing the shader only sees world-space positions, and a
+ * world height would drag a hillside trunk across the ground.
+ */
+function bakeBend(geometry: BufferGeometry, stiffness: number): void {
+  const position = geometry.getAttribute('position');
+  let top = 0;
+  for (let i = 0; i < position.count; i++) top = Math.max(top, position.getY(i));
+  const bend = new Float32Array(position.count);
+  for (let i = 0; i < position.count; i++) bend[i] = bendWeight(position.getY(i), top, stiffness);
+  geometry.setAttribute('bend', new Float32BufferAttribute(bend, 1));
+  // The chunk builder multiplies this by the instance's height scale for the per-instance amplitude.
+  geometry.userData.top = top;
+}
+
 export function createTreeGeometry(kind: TreeKind, variant: number): BufferGeometry {
   const seed = (kind === 'spruce' ? 11 : kind === 'birch' ? 23 : 37) + variant * 31;
-  if (kind === 'spruce') return spruce(seed, variant);
-  if (kind === 'birch') return birch(seed, variant);
-  return dead(seed, variant);
+  const geometry =
+    kind === 'spruce' ? spruce(seed, variant) : kind === 'birch' ? birch(seed, variant) : dead(seed, variant);
+  bakeBend(geometry, TREE_STIFFNESS[kind]);
+  return geometry;
 }
 
 /** Flat list of (kind, variant) pools, in wire order, plus the starting index of each kind. */
@@ -589,8 +611,10 @@ export const TREE_POOL_START: number[] = [];
 }
 
 /**
- * One material for all trees. Wind is a vertex displacement that grows with height squared: the trunk
- * base stays planted, the crown sways. `instanceIndex` gives every tree its own phase.
+ * One material for all trees. The bend weight is baked per vertex, so it is measured from the tree's own
+ * root and the trunk stays planted; `treeWind` carries what the world position cannot: the tree's base
+ * (so a gust front reaches the whole crown at once), a phase that survives chunk rewrites, and the tree's
+ * world height (a taller tree sways further, a sapling less).
  */
 export function createTreeMaterial(): MeshStandardNodeMaterial {
   const material = new MeshStandardNodeMaterial({
@@ -600,17 +624,32 @@ export function createTreeMaterial(): MeshStandardNodeMaterial {
     flatShading: true,
   });
 
-  const wind = uniform(0.16);
-  const phase = float(instanceIndex).mul(12.9898).sin().mul(43758.5453).fract().mul(6.283);
-
   material.positionNode = Fn(() => {
     const p = positionLocal;
-    const wave = sin(time.mul(1.1).add(phase))
-      .mul(0.65)
-      .add(sin(time.mul(1.7).add(phase.mul(1.7))).mul(0.35));
-    const height = p.y.mul(0.125).pow(2);
-    const sway = wave.mul(height).mul(wind);
-    return p.add(vec3(sway, 0, sway.mul(0.4)));
+    const bend = attribute('bend', 'float');
+    const tree = attribute('treeWind', 'vec4');
+    const t = WIND_CLOCK;
+
+    // Gusts travel downwind: one front reaches the whole tree, and neighbours answer together.
+    const gust = sin(t.mul(0.55).sub(tree.x.mul(0.05)).sub(tree.y.mul(0.03)))
+      .mul(0.5)
+      .add(0.5)
+      .mul(0.7)
+      .add(sin(t.mul(0.9).sub(tree.x.mul(0.11)).sub(tree.y.mul(0.07)).add(1.7)).mul(0.5).add(0.5).mul(0.3))
+      .mul(0.55)
+      .add(0.45);
+
+    // Two periods (7.4 s and 4.1 s) so the crown does not metronome; the gust scales both.
+    const sway = sin(t.mul(0.85).add(tree.z))
+      .mul(0.75)
+      .add(sin(t.mul(1.55).add(tree.z.mul(1.7)).add(0.9)).mul(0.25));
+    // A little across the wind, a quarter period ahead: the crown traces a thin ellipse.
+    const cross = sin(t.mul(0.85).add(tree.z).add(1.5708)).mul(0.22);
+
+    const amp = tree.w.mul(TREE_SWAY).mul(bend).mul(gust).mul(WIND_STRENGTH);
+    const dx = float(WIND_DIRECTION.x).mul(sway).add(float(-WIND_DIRECTION.y).mul(cross)).mul(amp);
+    const dz = float(WIND_DIRECTION.y).mul(sway).sub(float(WIND_DIRECTION.x).mul(cross)).mul(amp);
+    return p.add(vec3(dx, 0, dz));
   })();
 
   return material;

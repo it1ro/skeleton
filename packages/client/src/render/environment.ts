@@ -195,6 +195,8 @@ export class Environment {
   private readonly curveContrast = uniform(CURVE_CONTRAST);
   private readonly curveGain = uniform(1);
   timeOfDay = START_TIME;
+  /** Days added to the shared clock: the `?time=` hook for screenshots and benches, 0 in normal play. */
+  timeOffset = 0;
   /**
    * 0 — the gray world before the eyes, 1 — the normal world. Colored by default: the gray start waits for the
    * eyes in the body and the прозрение scene, `?vision=0` shows it (docs/graphics.md, «Прозрение»).
@@ -358,7 +360,7 @@ export class Environment {
   }
 
   update(serverTick: number, focusX: number, focusY: number, focusZ: number, biome: Biome): void {
-    this.timeOfDay = (START_TIME + (serverTick * TICK_DT) / DAY_LENGTH) % 1;
+    this.timeOfDay = (START_TIME + this.timeOffset + (serverTick * TICK_DT) / DAY_LENGTH) % 1;
     const angle = (this.timeOfDay - 0.25) * Math.PI * 2; // 0 at sunrise
     const height = Math.sin(angle); // -1..1
     const day = smooth(-0.1, 0.25, height);

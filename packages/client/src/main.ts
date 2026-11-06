@@ -4,6 +4,7 @@ import { createView } from './render/renderer.ts';
 import { Environment } from './render/environment.ts';
 import { createNit } from './render/nit.ts';
 import { ChunkManager, MOUND_RADIUS } from './world/chunks.ts';
+import { setWindStrength, setWindTime, updateWind } from './world/wind.ts';
 import { GrassField } from './world/grass.ts';
 import { Avatar, RemotePlayers, preloadAvatars } from './world/avatars.ts';
 import { preload } from './assets/models.ts';
@@ -77,7 +78,10 @@ const bench =
         name: params.get('benchName') ?? (benchRun ? 'run' : 'spawn'),
         run: benchRun,
         scene:
-          benchSceneParam === 'trees' || benchSceneParam === 'water' || benchSceneParam === 'sky'
+          benchSceneParam === 'trees' ||
+          benchSceneParam === 'water' ||
+          benchSceneParam === 'sky' ||
+          benchSceneParam === 'hill'
             ? benchSceneParam
             : 'spawn',
       });
@@ -93,6 +97,10 @@ declare global {
     __water?: (quality: number) => number;
     /** Console handle for the shadow axis: `__shadow(0)` cheapest map, `__shadow(1)` the reference look. */
     __shadow?: (quality: number) => number;
+    /** Console handle for the tree wind: `__wind(0)` plants the forest, `__wind(1)` restores it. */
+    __wind?: (strength: number) => number;
+    /** Console handle for the wind clock: `__windt(2.2)` freezes the pose, `__windt(null)` resumes. */
+    __windt?: (seconds: number | null) => number;
     /** Console handle for the mix: `__audio.state()`, `__audio.set({ world: 0 })`, `__audio.mute()`. */
     __audio?: {
       state: () => AudioDebug | null;
@@ -206,6 +214,10 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
 
   const env = new Environment(scene);
   view.setOutputNode(env.outputNode);
+  // `?time=10` (hours, 0..24) starts the shared clock at that hour: screenshots and benches at daylight
+  // instead of waiting for the pre-dawn start to roll around.
+  const timeParam = Number(params.get('time'));
+  if (params.has('time') && Number.isFinite(timeParam)) env.timeOffset = timeParam / 24 - env.timeOfDay;
   // `?vision=0` opens the game in the gray start; `__vision(1)` in the console brings the color back.
   const visionParam = Number(params.get('vision'));
   if (params.has('vision') && Number.isFinite(visionParam)) env.visionState = visionParam;
@@ -231,6 +243,13 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
     chunks.setShadowDistance(env.shadowCoverage);
     return env.shadowQuality;
   };
+  // `?wind=0..1` scales the tree wind; `?windt=<s>` freezes its clock so two frames show the same pose.
+  const windParam = Number(params.get('wind'));
+  if (params.has('wind') && Number.isFinite(windParam)) setWindStrength(windParam);
+  const windTimeParam = Number(params.get('windt'));
+  if (params.has('windt') && Number.isFinite(windTimeParam)) setWindTime(windTimeParam);
+  window.__wind = (strength: number) => setWindStrength(strength);
+  window.__windt = (seconds: number | null) => setWindTime(seconds);
   const grass = new GrassField(terrain, seed, chunks);
   const remotes = new RemotePlayers(terrain);
   const local = new LocalPlayer(terrain, spawnState(terrain));
@@ -351,6 +370,7 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
     bench?.placeCamera(pos);
     chunks.update(pos.x, pos.z);
     grass.update(pos.x, pos.z);
+    updateWind(dt);
     env.update(serverTick, pos.x, pos.y, pos.z, terrain.biomeAt(pos.x, pos.z));
     remotes.update(serverTick, dt, camera, window.innerWidth, window.innerHeight);
     me.updateLabel(camera, window.innerWidth, window.innerHeight);
