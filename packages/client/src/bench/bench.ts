@@ -5,8 +5,8 @@ import type { ChunkManager } from '../world/chunks.ts';
 import { frameStats, type FrameStats } from './stats.ts';
 import { takeHitches, type Hitch } from './hitches.ts';
 
-/** Where the fixed camera looks: the spawn meadow, a nearby tree, open water, or up at the sky. */
-export type BenchSceneKind = 'spawn' | 'trees' | 'water' | 'sky';
+/** Where the fixed camera looks: the spawn meadow, a tree, open water, the surf line, or the sky. */
+export type BenchSceneKind = 'spawn' | 'trees' | 'water' | 'shore' | 'surf' | 'sky';
 
 export interface BenchOptions {
   seconds?: number;
@@ -103,6 +103,52 @@ function findOcean(terrain: Terrain): { x: number; z: number } {
   return { x: 512, z: 0 };
 }
 
+/**
+ * Nearest shoreline from the spawn: ray-march 360 directions to the waterline, coarse then refined.
+ * `n` is the outward (seaward) normal, so `-n` points inland.
+ */
+function findShore(terrain: Terrain): { x: number; z: number; nx: number; nz: number } {
+  let best = Infinity;
+  let bestAngle = 0;
+  for (let i = 0; i < 360; i++) {
+    const angle = (i / 360) * Math.PI * 2;
+    const dx = Math.cos(angle);
+    const dz = Math.sin(angle);
+    for (let d = 32; d < 900; d += 8) {
+      if (terrain.heightAt(dx * d, dz * d) < WATER_LEVEL) {
+        if (d < best) {
+          best = d;
+          bestAngle = angle;
+        }
+        break;
+      }
+    }
+  }
+  // Refine to the meter: the exact waterline changes with every meter on a gentle beach.
+  let angle = bestAngle;
+  for (const step of [1, 0.25]) {
+    const start = Math.max(32, best - 8);
+    let finest = best;
+    let finestAngle = angle;
+    for (let a = angle - 0.04; a <= angle + 0.04; a += 0.002) {
+      const dx = Math.cos(a);
+      const dz = Math.sin(a);
+      for (let d = start; d < best + 8; d += step) {
+        if (terrain.heightAt(dx * d, dz * d) < WATER_LEVEL) {
+          if (d < finest) {
+            finest = d;
+            finestAngle = a;
+          }
+          break;
+        }
+      }
+    }
+    best = finest;
+    angle = finestAngle;
+  }
+  return { x: Math.cos(angle) * best, z: Math.sin(angle) * best, nx: Math.cos(angle), nz: Math.sin(angle) };
+}
+
 export function createBench(options: BenchOptions = {}) {
   const seconds = Math.max(1, options.seconds ?? 10);
   const name = options.name ?? 'spawn';
@@ -120,6 +166,7 @@ export function createBench(options: BenchOptions = {}) {
   let triangles = 0;
   let casters = 0;
   let ocean: { x: number; z: number } | null = null;
+  let shore: { x: number; z: number; nx: number; nz: number } | null = null;
   let tree: { x: number; y: number; z: number } | null = null;
   let treeSearched = false;
   const times: number[] = [];
@@ -205,6 +252,27 @@ export function createBench(options: BenchOptions = {}) {
       const cam = target.view.camera;
       cam.position.set(pos.x, pos.y + 1.6, pos.z);
       cam.lookAt(pos.x, pos.y + 500, pos.z);
+      return;
+    }
+    if (scene === 'shore' || scene === 'surf') {
+      if (!shore) shore = findShore(target.terrain);
+      const cam = target.view.camera;
+      // `surf`: stand at the waterline and look out to sea — the player's usual view of the breakers.
+      if (scene === 'surf') {
+        const px = shore.x - shore.nx * 5;
+        const pz = shore.z - shore.nz * 5;
+        cam.position.set(px, target.terrain.heightAt(px, pz) + 1.5, pz);
+        cam.lookAt(shore.x + shore.nx * 40, WATER_LEVEL + 0.3, shore.z + shore.nz * 40);
+        return;
+      }
+      // `shore`: look along the waterline, so the surf line runs diagonally through the frame.
+      const inland = 12;
+      const px = shore.x - shore.nx * inland;
+      const pz = shore.z - shore.nz * inland;
+      const tx = -shore.nz;
+      const tz = shore.nx;
+      cam.position.set(px, target.terrain.heightAt(px, pz) + 1.6, pz);
+      cam.lookAt(shore.x + tx * 30 + shore.nx * 10, WATER_LEVEL + 0.5, shore.z + tz * 30 + shore.nz * 10);
       return;
     }
     if (!ocean) ocean = findOcean(target.terrain);

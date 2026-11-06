@@ -77,7 +77,11 @@ const bench =
         name: params.get('benchName') ?? (benchRun ? 'run' : 'spawn'),
         run: benchRun,
         scene:
-          benchSceneParam === 'trees' || benchSceneParam === 'water' || benchSceneParam === 'sky'
+          benchSceneParam === 'trees' ||
+          benchSceneParam === 'water' ||
+          benchSceneParam === 'shore' ||
+          benchSceneParam === 'surf' ||
+          benchSceneParam === 'sky'
             ? benchSceneParam
             : 'spawn',
       });
@@ -206,6 +210,10 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
 
   const env = new Environment(scene);
   view.setOutputNode(env.outputNode);
+  // `?time=10` (hours, 0..24) starts the shared clock at that hour: screenshots and benches at daylight
+  // instead of waiting for the pre-dawn start to roll around.
+  const timeParam = Number(params.get('time'));
+  if (params.has('time') && Number.isFinite(timeParam)) env.timeOffset = timeParam / 24 - env.timeOfDay;
   // `?vision=0` opens the game in the gray start; `__vision(1)` in the console brings the color back.
   const visionParam = Number(params.get('vision'));
   if (params.has('vision') && Number.isFinite(visionParam)) env.visionState = visionParam;
