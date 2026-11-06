@@ -20,6 +20,16 @@ export interface SpeechEvents {
   onFirstAudio?: (ms: number) => void;
 }
 
+/**
+ * Where the voice goes. The mixer gives the game's single context and its `head` bus:
+ * Повитуха is otherworld, so she is heard past the ears and never muffled. Without an
+ * output `Speech` owns a context, which keeps it usable on its own.
+ */
+export interface SpeechOutput {
+  context: AudioContext;
+  output: AudioNode;
+}
+
 export class Speech {
   private context: AudioContext | null = null;
   private gain: GainNode | null = null;
@@ -42,7 +52,14 @@ export class Speech {
   /** Bumped on every stop: a clip that arrives late belongs to a line nobody waits for anymore. */
   private generation = 0;
 
-  constructor(private readonly events: SpeechEvents = {}) {}
+  constructor(
+    private readonly events: SpeechEvents = {},
+    /**
+     * `undefined` — Speech owns a context (standalone use); a value — the mixer's output;
+     * `null` — sound is off for this session, stay silent instead of opening a second context.
+     */
+    private readonly external?: SpeechOutput | null,
+  ) {}
 
   get firstAudioMs(): number {
     return this.first;
@@ -58,7 +75,7 @@ export class Speech {
   }
 
   feed(chunk: string): void {
-    if (this.muted) return;
+    if (this.muted || this.external === null) return;
     this.pending += chunk;
     for (;;) {
       const cut = breakAt(this.pending);
@@ -201,10 +218,11 @@ export class Speech {
 
   private ensureContext(): AudioContext {
     if (!this.context) {
-      this.context = new AudioContext();
-      this.gain = this.context.createGain();
+      const context = this.external?.context ?? new AudioContext();
+      this.context = context;
+      this.gain = context.createGain();
       this.gain.gain.value = 0.9;
-      this.gain.connect(this.context.destination);
+      this.gain.connect(this.external?.output ?? context.destination);
     }
     void this.context.resume().catch(() => {});
     return this.context;

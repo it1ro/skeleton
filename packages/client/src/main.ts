@@ -6,6 +6,7 @@ import { createNit } from './render/nit.ts';
 import { ChunkManager } from './world/chunks.ts';
 import { GrassField } from './world/grass.ts';
 import { Avatar, RemotePlayers, preloadAvatars } from './world/avatars.ts';
+import { preload } from './assets/models.ts';
 import { Input } from './player/input.ts';
 import { OrbitCamera } from './player/camera.ts';
 import { LocalPlayer } from './player/local.ts';
@@ -13,6 +14,9 @@ import { PovituhaFigure } from './npc/figure.ts';
 import { TalkPanel } from './npc/panel.ts';
 import { createBench } from './bench/bench.ts';
 import { startTelemetry } from './telemetry/telemetry.ts';
+import { Mixer, type AudioDebug, type LevelsPatch } from './audio/mixer.ts';
+import { startWind } from './audio/wind.ts';
+import type { AudioLevels } from './audio/levels.ts';
 
 const canvas = document.getElementById('view') as HTMLCanvasElement;
 const menu = document.getElementById('menu')!;
@@ -66,6 +70,9 @@ const bench =
             : 'spawn',
       });
 
+// `?audio=0` disables sound, and the bench never creates it: the reference run measures the frame, not the mix.
+const audio = !bench && params.get('audio') !== '0' ? new Mixer() : null;
+
 declare global {
   interface Window {
     /** Console handle for the gray→color hook: `__vision(0)` grays the world, `__vision(1)` restores it. */
@@ -74,8 +81,20 @@ declare global {
     __water?: (quality: number) => number;
     /** Console handle for the shadow axis: `__shadow(0)` cheapest map, `__shadow(1)` the reference look. */
     __shadow?: (quality: number) => number;
+    /** Console handle for the mix: `__audio.state()`, `__audio.set({ world: 0 })`, `__audio.mute()`. */
+    __audio?: {
+      state: () => AudioDebug | null;
+      set: (patch: LevelsPatch) => AudioLevels | null;
+      mute: (on?: boolean) => AudioLevels | null;
+    };
   }
 }
+
+window.__audio = {
+  state: () => audio?.debug() ?? null,
+  set: (patch) => audio?.setLevels(patch) ?? null,
+  mute: (on = true) => audio?.setMuted(on) ?? null,
+};
 try {
   nameInput.value = localStorage.getItem(NAME_KEY) ?? '';
 } catch {
@@ -110,8 +129,9 @@ showFigure();
 /** Chunks around the spawn, in each direction, built before the game shows: no holes under the feet at start. */
 const START_CHUNKS = 2;
 
-// The character loads while the player types a name, so the game usually starts at once.
+// The characters load while the player types a name, so the game usually starts at once.
 const avatarsLoaded = preloadAvatars();
+const povituhaLoaded = preload('povituha');
 
 const input = new Input(canvas);
 let started = false;
@@ -130,7 +150,7 @@ if (bench) {
   menu.classList.add('hidden');
   started = true;
   status.textContent = 'Загрузка мира…';
-  start('Bench', figure).catch((err: unknown) => {
+  start('Bench', figure, null).catch((err: unknown) => {
     started = false;
     status.textContent = err instanceof Error ? err.message : String(err);
     menu.classList.remove('hidden');
@@ -139,6 +159,8 @@ if (bench) {
 
 form.addEventListener('submit', (e) => {
   e.preventDefault();
+  // Browsers only start audio inside a gesture; the Play button is that gesture.
+  audio?.unlock();
   input.lock();
   if (started) return;
   started = true;
@@ -150,14 +172,14 @@ form.addEventListener('submit', (e) => {
     // Not critical.
   }
   status.textContent = 'Загрузка мира…';
-  start(name, figure).catch((err: unknown) => {
+  start(name, figure, audio).catch((err: unknown) => {
     started = false;
     status.textContent = err instanceof Error ? err.message : String(err);
     document.exitPointerLock();
   });
 });
 
-async function start(name: string, skeleton: Skeleton): Promise<void> {
+async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Promise<void> {
   const conn: Connection = online ? await connectServer(name, skeleton) : connectLocal(name, localSeed, skeleton);
   const { id: selfId, seed } = conn.welcome;
   const terrain = createTerrain(seed);
@@ -201,7 +223,7 @@ async function start(name: string, skeleton: Skeleton): Promise<void> {
   const local = new LocalPlayer(terrain, spawnState(terrain));
   const orbit = new OrbitCamera(camera, terrain);
   chunks.update(local.state.x, local.state.z);
-  await Promise.all([avatarsLoaded, chunks.whenReady(START_CHUNKS)]);
+  await Promise.all([avatarsLoaded, povituhaLoaded, chunks.whenReady(START_CHUNKS)]);
   const me = new Avatar(name || 'Я', 0xd9a441, skeleton);
   scene.add(chunks.root, remotes.root, me.root, grass.root);
   // The first frame: a cold thread leading the eye from the spawn toward the landmark.
@@ -212,10 +234,17 @@ async function start(name: string, skeleton: Skeleton): Promise<void> {
   if (bench) bench.attach({ view, chunks, orbit, terrain, seed });
   const telemetry = bench ? null : startTelemetry({ seed, backend: view.backend, pixelRatio: renderer.getPixelRatio() });
   const povituha = new PovituhaFigure(terrain, scene, 3.4, -4.6);
+  // The single context and the head bus for Повитуха; without sound the panel keeps its own.
+  const audioContext = sound?.audioContext ?? null;
+  const audioHead = sound?.head ?? null;
+  const speechAudio = audioContext && audioHead ? { context: audioContext, output: audioHead } : undefined;
+  if (sound) void startWind(sound).catch((error: unknown) => console.warn('wind', error));
   const talk = new TalkPanel({
     llm: params.get('npc') === 'llm',
+    audio: speechAudio,
     onClose: () => {
       dialogueOpen = false;
+      povituha.setTalking(false);
       input.lock();
       syncMenu();
     },
@@ -281,6 +310,8 @@ async function start(name: string, skeleton: Skeleton): Promise<void> {
 
     const pos = local.renderPosition(accumulator / TICK_DT, dt);
     me.place(pos.x, pos.y, pos.z, pos.x - prevPos.x, pos.z - prevPos.z, local.speed, moveMode(pos.x, pos.y, pos.z, terrain), dt);
+    povituha.update(dt);
+    povituha.look(pos.x, pos.z, dt);
     prevPos = pos;
 
     const near = povituha.distanceTo(pos.x, pos.z) < 3.6;
@@ -289,6 +320,7 @@ async function start(name: string, skeleton: Skeleton): Promise<void> {
       dialogueOpen = true;
       document.exitPointerLock();
       syncMenu();
+      povituha.setTalking(true);
       talk.open();
     }
 

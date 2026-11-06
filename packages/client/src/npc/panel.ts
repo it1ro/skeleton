@@ -8,7 +8,7 @@ import {
   talk,
   type TalkState,
 } from '@skeleton/shared';
-import { Speech } from './speech.ts';
+import { Speech, type SpeechOutput } from './speech.ts';
 import { voiceLine, type VoiceReply } from './voice.ts';
 
 type Who = 'her' | 'me' | 'note';
@@ -36,6 +36,8 @@ export interface TalkOptions {
   /** Re-voice the authored line through the local proxy. Off by default: the game stays offline. */
   llm: boolean;
   onClose: () => void;
+  /** The mixer's `head` bus: otherworld voices are heard past the ears. */
+  audio?: SpeechOutput;
 }
 
 /**
@@ -54,7 +56,7 @@ export class TalkPanel {
   private readonly send: HTMLButtonElement;
   private readonly history: string[] = [];
   private readonly totals: Totals = { calls: 0, ms: 0, costUsd: 0, priced: false };
-  private readonly speech = new Speech({ onFirstAudio: (ms) => this.onFirstAudio(ms) });
+  private readonly speech: Speech;
   private metricEl: HTMLElement | null = null;
   private metricBase = '';
   private turnAudioMs = 0;
@@ -64,6 +66,7 @@ export class TalkPanel {
   private ended = false;
 
   constructor(private readonly opts: TalkOptions) {
+    this.speech = new Speech({ onFirstAudio: (ms) => this.onFirstAudio(ms) }, opts.audio ?? null);
     this.root = document.createElement('div');
     this.root.id = 'talk';
     this.root.className = 'hidden';
