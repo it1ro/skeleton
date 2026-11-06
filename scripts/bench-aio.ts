@@ -27,8 +27,11 @@ interface Options {
   seed: number;
   pixels: boolean;
   vision?: number;
+  time?: number;
   water?: number;
   shadow?: number;
+  wind?: number;
+  windt?: number;
   build: boolean;
   keep: boolean;
   uncapped: boolean;
@@ -61,6 +64,7 @@ function parseOptions(argv: string[]): Options {
     name: 'spawn',
     seed: 42,
     pixels: true,
+    vision: 1,
     build: true,
     keep: false,
     uncapped: true,
@@ -108,6 +112,12 @@ function parseOptions(argv: string[]): Options {
           throw new Error('--vision takes a number from 0 (gray) to 1 (color)');
         }
         break;
+      case '--time':
+        options.time = Number(value());
+        if (!Number.isFinite(options.time) || options.time < 0 || options.time > 24) {
+          throw new Error('--time takes an hour of the day from 0 to 24');
+        }
+        break;
       case '--water':
         options.water = Number(value());
         if (!Number.isFinite(options.water) || options.water < 0 || options.water > 1) {
@@ -118,6 +128,18 @@ function parseOptions(argv: string[]): Options {
         options.shadow = Number(value());
         if (!Number.isFinite(options.shadow) || options.shadow < 0 || options.shadow > 1) {
           throw new Error('--shadow takes a number from 0 (cheapest 512² over ±40 m) to 1 (2048² over ±70 m)');
+        }
+        break;
+      case '--wind':
+        options.wind = Number(value());
+        if (!Number.isFinite(options.wind) || options.wind < 0 || options.wind > 1) {
+          throw new Error('--wind takes 0 (still) to 1 (reference wind)');
+        }
+        break;
+      case '--windt':
+        options.windt = Number(value());
+        if (!Number.isFinite(options.windt) || options.windt < 0) {
+          throw new Error('--windt takes seconds from 0 (freezes the wind clock)');
         }
         break;
       case '--no-build':
@@ -164,11 +186,14 @@ function printHelp(): void {
   --width/--height      viewport (default: 1280x720)
   --pixels 0            full resolution instead of the half-resolution pixel look
   --vision <0..1>       gray→color hook: 0 for the gray start, 1 for full color (default: 1)
+  --time <0..24>        clock hour for the screenshot (default: the pre-dawn start)
   --water <0..1>        water quality axis: 0 dead/murky, 1 live/clear (default: 0.6)
   --shadow <0..1>       shadow quality axis: 0 cheapest, 1 reference 2048² over ±70 m (default: 1)
+  --wind <0..1>         tree wind axis: 0 plants the forest, 1 the reference wind (default: 1)
+  --windt <s>           freeze the wind clock at <s> seconds for a repeatable pose
   --vsync               measure with the display cap instead of uncapped
   --run                 run forward instead of standing still (chunk and grass streaming)
-  --scene <name>        camera target: spawn (default), water, sky
+  --scene <name>        camera target: spawn (default), trees, hill, water, sky
   --min-fps <n>         exit with code 1 if the measured fps is lower
   --no-build            reuse packages/client/dist
   --keep                leave the HTTP server and Chrome running
@@ -225,9 +250,13 @@ async function main(): Promise<void> {
   }
 
   const remoteHome = ssh(options, 'printf %s "$HOME"', true).trim();
-  const remoteDir = `${remoteHome}/skeleton-bench`;
-  const profile = `${remoteHome}/skeleton-bench-profile`;
-  if (!profile.endsWith('/skeleton-bench-profile')) throw new Error(`refusing profile path: ${profile}`);
+  // A second bench on the same machine must not stop the first one's units or overwrite its files:
+  // BENCH_UNIT and BENCH_DIR give a run its own namespace, ports come from --http-port/--cdp-port.
+  const unit = process.env.BENCH_UNIT ?? 'skeleton-bench';
+  const dirName = process.env.BENCH_DIR ?? 'skeleton-bench';
+  const remoteDir = `${remoteHome}/${dirName}`;
+  const profile = `${remoteHome}/${dirName}-profile`;
+  if (!profile.endsWith(`/${dirName}-profile`)) throw new Error(`refusing profile path: ${profile}`);
 
   let tunnel: ReturnType<typeof spawn> | null = null;
   let ws: WebSocket | null = null;
@@ -239,7 +268,7 @@ async function main(): Promise<void> {
     tunnel?.kill('SIGTERM');
     if (!options.keep) {
       try {
-        ssh(options, `systemctl --user stop skeleton-bench-chrome skeleton-bench-http 2>/dev/null; rm -rf ${shq(profile)}; true`);
+        ssh(options, `systemctl --user stop ${unit}-chrome ${unit}-http 2>/dev/null; rm -rf ${shq(profile)}; true`);
       } catch {
         // Already stopped: the benchmark result matters more than the cleanup error.
       }
@@ -248,9 +277,9 @@ async function main(): Promise<void> {
 
   try {
     console.log(`· ${options.host}: copy client`);
-    ssh(options, `mkdir -p ${shq(remoteDir)}; systemctl --user stop skeleton-bench-chrome skeleton-bench-http 2>/dev/null; true`);
+    ssh(options, `mkdir -p ${shq(remoteDir)}; systemctl --user stop ${unit}-chrome ${unit}-http 2>/dev/null; true`);
     const rsyncSsh = ['ssh', '-o', 'BatchMode=yes', ...(options.sshConfig ? ['-F', options.sshConfig] : [])].join(' ');
-    const copy = spawnSync('rsync', ['-a', '--delete', '-e', rsyncSsh, `${DIST}/`, `${options.host}:skeleton-bench/`], {
+    const copy = spawnSync('rsync', ['-a', '--delete', '-e', rsyncSsh, `${DIST}/`, `${options.host}:${dirName}/`], {
       cwd: ROOT,
       stdio: 'inherit',
     });
@@ -259,7 +288,7 @@ async function main(): Promise<void> {
     console.log('· start HTTP server');
     ssh(
       options,
-      `systemd-run --user --unit=skeleton-bench-http --working-directory=${shq(remoteDir)} ` +
+      `systemd-run --user --unit=${unit}-http --working-directory=${shq(remoteDir)} ` +
         `${shq(process.env.BENCH_PYTHON ?? '/usr/bin/python3')} -m http.server ${options.httpPort} --bind 127.0.0.1`,
     );
     ssh(
@@ -269,12 +298,15 @@ async function main(): Promise<void> {
 
     const url =
       `http://127.0.0.1:${options.httpPort}/?seed=${options.seed}&bench=${options.seconds}` +
-      `&benchName=${encodeURIComponent(options.name)}${options.pixels ? '' : '&pixels=0'}` +
+      `&benchName=${encodeURIComponent(options.name)}${options.pixels ? '&pixels=1' : '&pixels=0'}` +
       `${options.run ? '&benchRun' : ''}` +
       `${options.scene !== 'spawn' ? `&benchScene=${options.scene}` : ''}` +
       `${options.vision !== undefined ? `&vision=${options.vision}` : ''}` +
+      `${options.time !== undefined ? `&time=${options.time}` : ''}` +
       `${options.water !== undefined ? `&water=${options.water}` : ''}` +
-      `${options.shadow !== undefined ? `&shadow=${options.shadow}` : ''}`;
+      `${options.shadow !== undefined ? `&shadow=${options.shadow}` : ''}` +
+      `${options.wind !== undefined ? `&wind=${options.wind}` : ''}` +
+      `${options.windt !== undefined ? `&windt=${options.windt}` : ''}`;
     const chrome = [
       process.env.BENCH_PRIME_RUN ?? '/usr/local/bin/prime-run',
       process.env.BENCH_CHROME ?? '/usr/bin/google-chrome-stable',
@@ -297,7 +329,7 @@ async function main(): Promise<void> {
     console.log('· start Chrome on the reference GPU');
     ssh(
       options,
-      `rm -rf ${shq(profile)}; systemd-run --user --unit=skeleton-bench-chrome --working-directory=${shq(remoteHome)} ` +
+      `rm -rf ${shq(profile)}; systemd-run --user --unit=${unit}-chrome --working-directory=${shq(remoteHome)} ` +
         chrome.map(shq).join(' '),
     );
 
@@ -402,8 +434,11 @@ async function main(): Promise<void> {
       uncapped: options.uncapped,
       pixels: options.pixels,
       vision: options.vision ?? 1,
+      time: options.time ?? null,
       water: options.water ?? 0.6,
       shadow: options.shadow ?? 1,
+      wind: options.wind ?? 1,
+      windt: options.windt ?? null,
     };
     writeFileSync(`${base}.json`, `${JSON.stringify(report, null, 2)}\n`);
     if (screenshot) writeFileSync(`${base}.png`, Buffer.from(screenshot, 'base64'));

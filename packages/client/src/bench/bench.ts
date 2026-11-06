@@ -5,8 +5,8 @@ import type { ChunkManager } from '../world/chunks.ts';
 import { frameStats, type FrameStats } from './stats.ts';
 import { takeHitches, type Hitch } from './hitches.ts';
 
-/** Where the fixed camera looks: the spawn meadow, open water, or up at the sky. */
-export type BenchSceneKind = 'spawn' | 'water' | 'sky';
+/** Where the fixed camera looks: the spawn meadow, a nearby tree, a hillside tree, open water, or up at the sky. */
+export type BenchSceneKind = 'spawn' | 'trees' | 'hill' | 'water' | 'sky';
 
 export interface BenchOptions {
   seconds?: number;
@@ -75,6 +75,45 @@ const ORBIT_START = Math.PI / 4;
 const ORBIT_PITCH = -0.16;
 const ORBIT_DISTANCE = 9;
 
+/** Closest tree to the spawn: the `trees` scene frames a birch if one is near, else whatever stands. */
+function findTree(terrain: Terrain): { x: number; y: number; z: number } | null {
+  let best: { x: number; y: number; z: number } | null = null;
+  let bestScore = Infinity;
+  for (let cx = -2; cx <= 2; cx++) {
+    for (let cz = -2; cz <= 2; cz++) {
+      for (const spot of terrain.treesInChunk(cx, cz)) {
+        const distance = Math.hypot(spot.x, spot.z);
+        if (distance < 10) continue;
+        const score = distance + (spot.kind === 'birch' ? 0 : 12);
+        if (score < bestScore) {
+          bestScore = score;
+          best = { x: spot.x, y: spot.y, z: spot.z };
+        }
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * The highest tree within reach, for the `hill` scene. The old wind grew with world height, so a slope
+ * was exactly where trunks walked: a 38 m tree dragged its root 3.6 m across the ground.
+ */
+function findHighTree(terrain: Terrain): { x: number; y: number; z: number } | null {
+  let best: { x: number; y: number; z: number } | null = null;
+  let bestY = 24;
+  for (let cx = -4; cx <= 4; cx++) {
+    for (let cz = -4; cz <= 4; cz++) {
+      for (const spot of terrain.treesInChunk(cx, cz)) {
+        if (spot.y <= bestY) continue;
+        bestY = spot.y;
+        best = { x: spot.x, y: spot.y, z: spot.z };
+      }
+    }
+  }
+  return best;
+}
+
 /** First open-ocean cell along +x: the island is finite, so this always finds water. */
 function findOcean(terrain: Terrain): { x: number; z: number } {
   for (let d = 64; d < 8192; d += 16) {
@@ -100,6 +139,8 @@ export function createBench(options: BenchOptions = {}) {
   let triangles = 0;
   let casters = 0;
   let ocean: { x: number; z: number } | null = null;
+  let tree: { x: number; y: number; z: number } | null = null;
+  let treeSearched = false;
   const times: number[] = [];
   const cpuTimes: number[] = [];
   const renderTimes: number[] = [];
@@ -162,6 +203,23 @@ export function createBench(options: BenchOptions = {}) {
   /** Positions the camera for the current frame for `water` and `sky`; `spawn` goes through the orbit. */
   function placeCameraImpl(pos: { x: number; y: number; z: number }): void {
     if (!target || scene === 'spawn') return;
+    if (scene === 'trees' || scene === 'hill') {
+      if (!treeSearched) {
+        tree = scene === 'hill' ? findHighTree(target.terrain) : findTree(target.terrain);
+        treeSearched = true;
+      }
+      if (!tree) return;
+      const cam = target.view.camera;
+      const side = 13;
+      const distance = Math.hypot(tree.x, tree.z) || 1;
+      // Stand on the far side, looking back toward the spawn: the reference sun rises behind that view,
+      // so the tree is front-lit instead of a silhouette.
+      const bx = (tree.x / distance) * side;
+      const bz = (tree.z / distance) * side;
+      cam.position.set(tree.x + bx + side * 0.4, tree.y + 3.2, tree.z + bz - side * 0.4);
+      cam.lookAt(tree.x, tree.y + 4.4, tree.z);
+      return;
+    }
     if (scene === 'sky') {
       const cam = target.view.camera;
       cam.position.set(pos.x, pos.y + 1.6, pos.z);

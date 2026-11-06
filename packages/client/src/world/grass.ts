@@ -4,7 +4,9 @@ import {
   Color,
   Group,
   MeshStandardMaterial,
+  MeshStandardNodeMaterial,
 } from 'three/webgpu';
+import { Fn, attribute, positionLocal, sin, time, uniform, vec3 } from 'three/tsl';
 import { SCATTER_TILE, GRASS_STEP, FLOWER_STEP, buildScatterData, type ScatterData, type Terrain } from '@skeleton/shared';
 import { InstancedPool, type PoolBlock } from './instanced-pool.ts';
 import type { ChunkManager } from './chunks.ts';
@@ -48,47 +50,102 @@ interface Tile {
 
 const key = (tx: number, tz: number) => `${tx},${tz}`;
 
+/** Deterministic 0..1 from a seed, so each blade in a tuft gets its own size and lean. */
+function hash01(seed: number): number {
+  const v = Math.sin(seed * 12.9898) * 43758.5453;
+  return v - Math.floor(v);
+}
+
+const TAU = Math.PI * 2;
+const BLADE_BASE = new Color(0x3a4a2a);
+const BLADE_TIP = new Color(0x9aa86a);
+/** A few blades dry out: a warm shift at the tip keeps the meadow from reading as one flat green. */
+const BLADE_DRY = new Color(0xb9a45c);
+const BLADE_BASE_DRY = new Color(0x4a4626);
+
+/** Width multiplier along a blade: narrow root, broadest in the lower third, then a long taper to a point. */
+function bladeWidth(t: number): number {
+  const root = 0.6 + 0.4 * Math.min(1, t / 0.3);
+  const tip = t < 0.6 ? 1 : 1 - 0.92 * Math.pow((t - 0.6) / 0.4, 0.85);
+  return root * tip;
+}
+
 /**
- * A tuft of crossed tapered quads with vertex colors. No texture and no alpha: the blades are solid,
- * so there is no sorting and no alpha-test overdraw. Five blades read as a clump from any direction.
+ * A tuft of blades bent along arcs, with vertex colors. No texture and no alpha: the blades are solid,
+ * so there is no sorting and no alpha-test overdraw.
+ *
+ * Each blade is a ribbon of `segments` quads whose centerline follows an arc with a tangent that turns
+ * faster toward the tip: the root stands up, the tip arches over and on long blades falls back below
+ * its own high point. Arc length, root lean, total bend and azimuth are hashed per blade, so a tuft is
+ * a ragged clump with blades curved to different degrees — not a star of straight slivers.
+ *
+ * Normals stay up (0, 1, 0): a blade lit by its own face would flicker from dark to light as it turns,
+ * while an upward normal keeps the meadow evenly lit and lets the baked color do the volume.
  */
-function tuftGeometry(blades: number, height: number, width: number): BufferGeometry {
+export function tuftGeometry(blades: number, height: number, width: number, segments = 2): BufferGeometry {
   const positions: number[] = [];
   const normals: number[] = [];
   const colors: number[] = [];
+  const weights: number[] = [];
   const indices: number[] = [];
-  const base = new Color(0x2d5522);
-  const tip = new Color(0x9ac455);
-  const topScale = 0.2;
+  const step = 1 / segments;
 
   for (let b = 0; b < blades; b++) {
-    const angle = (b / blades) * Math.PI;
-    const dx = Math.cos(angle);
-    const dz = Math.sin(angle);
+    const s = b * 13.7;
+    const azimuth = hash01(s + 0.5) * TAU;
+    const dx = Math.cos(azimuth);
+    const dz = Math.sin(azimuth);
     const px = -dz;
     const pz = dx;
-    const h = height * (0.8 + 0.35 * (b % 3));
-    const lean = 0.15;
+    // Roots sit on a small disc, not on one point: the blades splay from a clump instead of a star.
+    const rootR = 0.006 + hash01(s + 1) * 0.026;
+    const length = height * (0.5 + hash01(s + 2) * 0.85);
+    const rootLean = 0.04 + hash01(s + 3) * 0.3;
+    const bend = 0.18 + Math.pow(hash01(s + 4), 1.5) * 1.6;
+    const w0 = width * (0.6 + hash01(s + 5) * 0.9);
+    const dry = hash01(s + 6);
+    const light = 0.88 + hash01(s + 7) * 0.24;
+    const baseColor = BLADE_BASE.clone().lerp(BLADE_BASE_DRY, dry * 0.35).multiplyScalar(light);
+    const tipColor = BLADE_TIP.clone().lerp(BLADE_DRY, dry * 0.5).multiplyScalar(light);
+
+    // Centerline: midpoint integration of the arc, one segment per row. The tangent turns with `t^1.7`,
+    // so the lower half stays upright and the upper half does most of the bending.
+    const centre: [number, number][] = [];
+    let cx = 0;
+    let cy = 0;
+    for (let r = 0; r <= segments; r++) {
+      centre.push([cx, cy]);
+      const angle = rootLean + bend * Math.pow((r + 0.5) * step, 1.7);
+      cx += length * step * Math.sin(angle);
+      cy += length * step * Math.cos(angle);
+    }
+
     const start = positions.length / 3;
-    const points: [number, number, number][] = [
-      [-px * width, 0, -pz * width],
-      [px * width, 0, pz * width],
-      [dx * lean - px * width * topScale, h, dz * lean - pz * width * topScale],
-      [dx * lean + px * width * topScale, h, dz * lean + pz * width * topScale],
-    ];
-    points.forEach(([x, y, z], index) => {
-      positions.push(x, y, z);
-      normals.push(0, 1, 0);
-      const color = index < 2 ? base : tip;
-      colors.push(color.r, color.g, color.b);
-    });
-    indices.push(start, start + 1, start + 2, start + 2, start + 1, start + 3);
+    for (let r = 0; r <= segments; r++) {
+      const t = r / segments;
+      const [ox, oy] = centre[r];
+      const w = w0 * bladeWidth(t);
+      const x = dx * (rootR + ox);
+      const z = dz * (rootR + ox);
+      positions.push(x - px * w, oy, z - pz * w, x + px * w, oy, z + pz * w);
+      normals.push(0, 1, 0, 0, 1, 0);
+      // Wind weight: 0 at the root, ~1 at the tip of a nominal-height blade. The shader reads it after
+      // instancing, where `positionLocal` is already world space and the root height is gone.
+      weights.push(oy / height, oy / height);
+      const color = baseColor.clone().lerp(tipColor, Math.pow(t, 0.85));
+      colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+    }
+    for (let r = 0; r < segments; r++) {
+      const i = start + r * 2;
+      indices.push(i, i + 1, i + 2, i + 2, i + 1, i + 3);
+    }
   }
 
   const geometry = new BufferGeometry();
   geometry.setAttribute('position', new BufferAttribute(new Float32Array(positions), 3));
   geometry.setAttribute('normal', new BufferAttribute(new Float32Array(normals), 3));
   geometry.setAttribute('color', new BufferAttribute(new Float32Array(colors), 3));
+  geometry.setAttribute('blade', new BufferAttribute(new Float32Array(weights), 1));
   geometry.setIndex(indices);
   return geometry;
 }
@@ -139,13 +196,42 @@ function flowerMeshGeometry(): BufferGeometry {
   return geometry;
 }
 
+/**
+ * One material for all grass. Wind is a vertex displacement that grows with the blade weight squared:
+ * the root stays planted, the tip sways a few centimetres.
+ *
+ * The phase comes from the world position, not from `instanceIndex`: gusts then travel across the
+ * meadow, and the field does not jump when a tile ring shift rewrites the instance order. Note that
+ * `positionLocal` is already world space here — three applies the instance transform before
+ * `positionNode` — so the sway direction is shared by the whole meadow and the root height must come
+ * from the baked `blade` weight.
+ */
+function createGrassMaterial(): MeshStandardNodeMaterial {
+  const material = new MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.95 });
+  const wind = uniform(0.05); // metres of sway at the tip of a full-height blade
+
+  material.positionNode = Fn(() => {
+    const p = positionLocal;
+    // Two waves with different lengths, drifting in the same direction: a gust, not a shudder.
+    const wave = sin(time.mul(1.7).sub(p.x.mul(0.55)).sub(p.z.mul(0.3)))
+      .mul(0.7)
+      .add(sin(time.mul(2.4).sub(p.x.mul(1.2)).sub(p.z.mul(0.8))).mul(0.3));
+    const weight = attribute('blade', 'float').pow(2);
+    const sway = wave.mul(weight).mul(wind);
+    return p.add(vec3(sway, 0, sway.mul(0.4)));
+  })();
+
+  return material;
+}
+
 /** Grass and flowers in a ring around the player, drawn as one instanced mesh per type. */
 export class GrassField {
   readonly root = new Group();
   private readonly tiles = new Map<string, Tile>();
+  // Two segments per blade: 5 blades × 4 triangles = 20 triangles per tuft (10 with the old straight quads).
   private readonly grassGeometry = tuftGeometry(5, 0.45, 0.03);
   private readonly flowerGeometry = flowerMeshGeometry();
-  private readonly grassMaterial = new MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
+  private readonly grassMaterial = createGrassMaterial();
   private readonly flowerMaterial = new MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
   private readonly grassPool: InstancedPool;
   private readonly flowerPool: InstancedPool;

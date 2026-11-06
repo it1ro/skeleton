@@ -3,10 +3,14 @@
  *
  *   npm run assets:rig
  *
- * The sources are `assets-src/meshy/rigged_m.glb` and `rigged_f.glb`: Meshy exports made with the UE5 Mannequin
- * skeleton template, one file per character, each with the clips added in the Meshy animation library. Unlike
- * `build-assets.ts`, nothing is skinned here: the mesh arrives bound to its own skeleton, so the build only cleans
- * the file up for the game. Output goes to packages/client/src/assets/models/ and is committed.
+ * The sources are `assets-src/meshy/rigged_m.glb`, `rigged_f.glb`, `povituha.glb` and `neodobudka.glb`: Meshy
+ * exports, one file per character. The players and Повитуха are made with the UE5 Mannequin skeleton template, with
+ * the clips added in the Meshy animation library; Недобудка is a static model with the pose baked in and no rig.
+ * Unlike `build-assets.ts`, nothing is skinned here: the mesh arrives ready, so the build only cleans the file up
+ * for the game. Players and NPCs go through the same list; an NPC simply keeps the clips it plays (Повитуха stands
+ * and talks, Недобудка keeps none). Output goes to packages/client/src/assets/models/ and is committed.
+ *
+ * `npm run assets:rig -- neodobudka` builds one character; without arguments it builds them all.
  */
 import { existsSync } from 'node:fs';
 import { join as joinPath } from 'node:path';
@@ -47,8 +51,8 @@ interface Clip {
 }
 
 interface Character {
-  /** Suffix of the built file: `m` gives `player_rig_m.glb`. */
-  id: string;
+  /** Name of the built file without `.glb`: `player_rig_m` gives `player_rig_m.glb`. */
+  output: string;
   /** For logs and errors. */
   title: string;
   source: string;
@@ -83,7 +87,7 @@ const SHARED: Record<string, Clip> = {
 };
 
 const MALE: Character = {
-  id: 'm',
+  output: 'player_rig_m',
   title: 'male skeleton',
   source: 'assets-src/meshy/rigged_m.glb',
   scale: 1.8 / 1.7,
@@ -95,7 +99,7 @@ const MALE: Character = {
 };
 
 const FEMALE: Character = {
-  id: 'f',
+  output: 'player_rig_f',
   title: 'female skeleton',
   source: 'assets-src/meshy/rigged_f.glb',
   scale: 1,
@@ -107,7 +111,36 @@ const FEMALE: Character = {
   },
 };
 
-const CHARACTERS = [MALE, FEMALE];
+/**
+ * Повитуха stands at the spawn and talks: she needs the standing idle and the talking gesture, no locomotion.
+ * Meshy rigged her at 1.70, the same as the female skeleton; the build shrinks her to 1.62 so the old woman
+ * reads smaller than the player (docs/assets.md).
+ */
+const POVITUHA: Character = {
+  output: 'povituha',
+  title: 'Повитуха',
+  source: 'assets-src/meshy/povituha.glb',
+  scale: 1.62 / 1.7,
+  clips: {
+    Idle: { source: 'Idle_12' },
+    Talk: { source: 'Talk_with_Left_Hand_on_Hip' },
+  },
+};
+
+/**
+ * Недобудка, the first guard, asleep at her barrow (docs/characters.md). Meshy made her without a rig: the pose is
+ * baked into the mesh, so the build has no clips to rename or cut, only textures to clean and geometry to compress.
+ * She is 2.00 m tall as she sits — about 4 m standing — with her origin at the bottom and her face toward +Z.
+ */
+const NEODOBUDKA: Character = {
+  output: 'neodobudka',
+  title: 'Недобудка',
+  source: 'assets-src/meshy/neodobudka.glb',
+  scale: 1,
+  clips: {},
+};
+
+const CHARACTERS = [MALE, FEMALE, POVITUHA, NEODOBUDKA];
 
 const io = new NodeIO()
   .registerExtensions(ALL_EXTENSIONS)
@@ -301,9 +334,9 @@ async function build(character: Character): Promise<void> {
     textureCompress({ encoder: sharp, targetFormat: 'webp', resize: TEXTURE_SIZE, quality: 85 }),
     meshopt({ encoder: MeshoptEncoder, level: 'medium' }),
   );
-  await write(doc, `player_rig_${character.id}.glb`);
+  await write(doc, `${character.output}.glb`);
 
-  console.log(`${character.title}: ${built.length} clips, height ${(top - bottom).toFixed(2)} m`);
+  console.log(`${character.title}: ${built.length ? `${built.length} clips` : 'static'}, height ${(top - bottom).toFixed(2)} m`);
   for (const anim of built) {
     console.log(`  ${anim.getName().padEnd(10)} ${lastKey(anim).toFixed(2)} s`);
   }
@@ -324,11 +357,19 @@ async function write(doc: Document, name: string): Promise<void> {
   console.log(`${path}: ${(bytes / 1024).toFixed(0)} KB`);
 }
 
-for (const character of CHARACTERS) {
+/** Characters named on the command line, or all of them. */
+const requested = process.argv.slice(2);
+const characters = requested.length ? CHARACTERS.filter((c) => requested.includes(c.output)) : CHARACTERS;
+if (!characters.length) {
+  console.error(`Unknown character: ${requested.join(', ')}\nKnown: ${CHARACTERS.map((c) => c.output).join(', ')}`);
+  process.exit(1);
+}
+
+for (const character of characters) {
   if (!existsSync(character.source)) {
     console.error(`Missing ${character.source}\nGet the sources first: see assets-src/README.md`);
     process.exit(1);
   }
 }
 await MeshoptEncoder.ready;
-for (const character of CHARACTERS) await build(character);
+for (const character of characters) await build(character);

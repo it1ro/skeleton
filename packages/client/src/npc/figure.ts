@@ -1,75 +1,105 @@
 import {
-  CylinderGeometry,
+  AnimationMixer,
   Group,
-  Mesh,
-  MeshStandardMaterial,
-  SphereGeometry,
   Vector3,
+  type AnimationAction,
   type PerspectiveCamera,
   type Scene,
 } from 'three/webgpu';
 import type { Terrain } from '@skeleton/shared';
+import { loadModel } from '../assets/models.ts';
+
+/** Crossfade between the standing idle and the talking gesture, seconds. */
+const FADE = 0.25;
+/** She notices the skeleton this far away and turns to him. */
+const TURN_RADIUS = 8;
+/** Share of the remaining angle turned per second: an old woman does not snap around. */
+const TURN_SPEED = 3.5;
 
 /**
- * A greybox Повитуха: half bone, half cloth, hunched over a staff. No model yet, but enough
- * silhouette to find her at the spawn and tell her apart from a player.
+ * Повитуха at the spawn: the Meshy model with its own rig (docs/assets.md, «Свои клипы Meshy»). She stands in
+ * `Idle` and switches to the talking gesture while the dialogue panel is open. She has no walk clips, so she only
+ * turns: toward the skeleton when he comes close, back to the spawn when he leaves.
  */
 export class PovituhaFigure {
   readonly root = new Group();
   readonly x: number;
   readonly z: number;
   private readonly label = document.createElement('div');
+  /** Yaw that faces the spawn: her resting direction. */
+  private readonly restYaw: number;
+  private facing: number;
+  private mixer: AnimationMixer | null = null;
+  private idle: AnimationAction | null = null;
+  private talk: AnimationAction | null = null;
+  private talking = false;
 
   constructor(terrain: Terrain, scene: Scene, x: number, z: number) {
     this.x = x;
     this.z = z;
-
-    const cloth = new MeshStandardMaterial({ color: 0x3b332a, roughness: 1 });
-    const pale = new MeshStandardMaterial({ color: 0xc9bda3, roughness: 0.95 });
-    const bone = new MeshStandardMaterial({ color: 0xd9d3c2, roughness: 0.6 });
-    const scarf = new MeshStandardMaterial({ color: 0x6d3b32, roughness: 1 });
-    const wood = new MeshStandardMaterial({ color: 0x4a3524, roughness: 1 });
-
-    const body = new Mesh(new CylinderGeometry(0.27, 0.42, 1.08, 10), cloth);
-    body.position.y = 0.56;
-    body.rotation.x = 0.1;
-
-    const head = new Mesh(new SphereGeometry(0.21, 12, 10), pale);
-    head.position.set(0.02, 1.3, -0.04);
-
-    const kerchief = new Mesh(new SphereGeometry(0.24, 12, 10), scarf);
-    kerchief.position.set(0, 1.36, 0.04);
-    kerchief.scale.set(1, 0.85, 1);
-
-    this.root.add(body, head, kerchief);
-
-    for (const side of [-1, 1]) {
-      const arm = new Mesh(new CylinderGeometry(0.055, 0.06, 0.72, 6), cloth);
-      arm.position.set(side * 0.3, 0.95, 0);
-      arm.rotation.z = side * 0.35;
-      arm.rotation.x = 0.2;
-      this.root.add(arm);
-    }
-
-    const skirt = new Mesh(new CylinderGeometry(0.075, 0.09, 0.55, 6), cloth);
-    skirt.position.set(0.14, 0.3, 0);
-    const shin = new Mesh(new CylinderGeometry(0.045, 0.05, 0.62, 6), bone);
-    shin.position.set(-0.14, 0.32, 0);
-    const staff = new Mesh(new CylinderGeometry(0.028, 0.035, 1.72, 6), wood);
-    staff.position.set(-0.48, 0.84, 0.02);
-    staff.rotation.z = 0.1;
-    this.root.add(skirt, shin, staff);
-
-    this.root.traverse((object) => {
-      if (object instanceof Mesh) object.castShadow = true;
-    });
     this.root.position.set(x, terrain.heightAt(x, z), z);
-    // Face the spawn: the model's forward is -Z.
-    this.root.rotation.y = Math.atan2(x, z);
+    // Face the spawn: the game's forward is -Z, the model is turned inside the root.
+    this.restYaw = Math.atan2(x, z);
+    this.facing = this.restYaw;
+    this.root.rotation.y = this.facing;
     scene.add(this.root);
+
+    loadModel('povituha').then((model) => {
+      if (!model) {
+        // A missing file is a build error, not a reason to hide the spawn's only character silently.
+        console.warn('povituha: model is missing, the figure stays empty');
+        return;
+      }
+      // Meshy characters face +Z (Blender's -Y front), the game's forward is -Z; same turn as world/avatars.ts.
+      model.scene.rotation.y = Math.PI;
+      this.root.add(model.scene);
+      this.mixer = new AnimationMixer(model.scene);
+      const clips = new Map(model.animations.map((clip) => [clip.name, clip]));
+      const idle = clips.get('Idle');
+      const talk = clips.get('Talk');
+      if (idle) this.idle = this.mixer.clipAction(idle).play();
+      if (talk) this.talk = this.mixer.clipAction(talk);
+      // Pose the first frame before it is drawn: the bind pose is a T-pose, not a standing old woman.
+      this.mixer.update(0);
+      if (this.talking) this.crossFade();
+    });
 
     this.label.textContent = 'Повитуха';
     document.getElementById('labels')!.append(this.label);
+  }
+
+  /** Standing or talking; before the model loads the wish is remembered and applied when it does. */
+  setTalking(on: boolean): void {
+    if (this.talking === on) return;
+    this.talking = on;
+    this.crossFade();
+  }
+
+  private crossFade(): void {
+    if (!this.idle || !this.talk) return;
+    const [from, to] = this.talking ? [this.idle, this.talk] : [this.talk, this.idle];
+    to.reset().fadeIn(FADE).play();
+    from.fadeOut(FADE);
+  }
+
+  update(dt: number): void {
+    this.mixer?.update(dt);
+  }
+
+  /**
+   * Turns the figure: toward the skeleton while he is near, back to the spawn when he walks away. The game's
+   * forward is -Z (the model is turned by π inside the root), so facing the player is `atan2(-dx, -dz)`.
+   */
+  look(towardX: number, towardZ: number, dt: number): void {
+    const dx = towardX - this.x;
+    const dz = towardZ - this.z;
+    const distance = Math.hypot(dx, dz);
+    // Dead centre has no direction: keep the current one instead of snapping to atan2(0, 0).
+    const target =
+      distance < 0.3 ? this.facing : distance < TURN_RADIUS ? Math.atan2(-dx, -dz) : this.restYaw;
+    const diff = Math.atan2(Math.sin(target - this.facing), Math.cos(target - this.facing));
+    this.facing += diff * Math.min(1, dt * TURN_SPEED);
+    this.root.rotation.y = this.facing;
   }
 
   distanceTo(x: number, z: number): number {
@@ -77,7 +107,8 @@ export class PovituhaFigure {
   }
 
   updateLabel(camera: PerspectiveCamera, width: number, height: number): void {
-    const p = new Vector3(0, 2.15, 0).add(this.root.position).project(camera);
+    // She is 1.62 m: the label sits a little above the kerchief, not at the old placeholder's staff height.
+    const p = new Vector3(0, 1.95, 0).add(this.root.position).project(camera);
     const visible = p.z < 1 && Math.abs(p.x) < 1.1 && Math.abs(p.y) < 1.1;
     this.label.style.display = visible ? '' : 'none';
     if (visible) {
