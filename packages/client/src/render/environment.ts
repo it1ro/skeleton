@@ -195,8 +195,11 @@ export class Environment {
   private readonly curveContrast = uniform(CURVE_CONTRAST);
   private readonly curveGain = uniform(1);
   timeOfDay = START_TIME;
-  /** The world starts gray (before the eyes); `?vision=1` or `__vision(1)` brings the color for now. */
-  private vision = 0;
+  /**
+   * 0 — the gray world before the eyes, 1 — the normal world. Colored by default: the gray start waits for the
+   * eyes in the body and the прозрение scene, `?vision=0` shows it (docs/graphics.md, «Прозрение»).
+   */
+  private vision = 1;
   private shadowQualityValue = 1;
   /** The shadow level in force. */
   private shadow: ShadowSettings = DEFAULT_SHADOW;
