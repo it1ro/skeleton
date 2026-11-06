@@ -36,6 +36,13 @@ const TREE_CAPACITY = MAX_LOADED_CHUNKS * TREES_PER_CHUNK;
 /** Погост props are bounded by the ~140 m radius around the spawn, far below the chunked trees. */
 const PROP_CAPACITY = 512;
 
+/**
+ * The grave mound is a unit hemisphere stretched wide and low: 4.2 half-widths and 2.6 heights per unit of the
+ * prop's scale. Callers that need to stand or sit beside a mound use the radius, not the raw scale.
+ */
+export const MOUND_RADIUS = 4.2;
+export const MOUND_HEIGHT = 2.6;
+
 interface Chunk {
   group: Group;
   ready: boolean;
@@ -417,7 +424,7 @@ export class ChunkManager {
           const rotation = data.props[base + 4];
           if (propKind === 'mound') {
             // A wide, low hill: the geometry is a unit hemisphere, sized and sunk so the skirt meets the ground.
-            composeInstance(matrix, at, x + ox, y - 0.3, z + oz, rotation, 4.2 * scale, 2.6 * scale);
+            composeInstance(matrix, at, x + ox, y - 0.3, z + oz, rotation, MOUND_RADIUS * scale, MOUND_HEIGHT * scale);
           } else {
             // Crosses and bones carry real proportions in the geometry; uniform scale only.
             composeInstance(matrix, at, x + ox, y, z + oz, rotation, scale);

@@ -3,11 +3,14 @@
  *
  *   npm run assets:rig
  *
- * The sources are `assets-src/meshy/rigged_m.glb`, `rigged_f.glb` and `povituha.glb`: Meshy exports made with the
- * UE5 Mannequin skeleton template, one file per character, each with the clips added in the Meshy animation library.
- * Unlike `build-assets.ts`, nothing is skinned here: the mesh arrives bound to its own skeleton, so the build only
- * cleans the file up for the game. Players and NPCs go through the same list; an NPC simply keeps the clips it
- * plays (Повитуха stands and talks). Output goes to packages/client/src/assets/models/ and is committed.
+ * The sources are `assets-src/meshy/rigged_m.glb`, `rigged_f.glb`, `povituha.glb` and `neodobudka.glb`: Meshy
+ * exports, one file per character. The players and Повитуха are made with the UE5 Mannequin skeleton template, with
+ * the clips added in the Meshy animation library; Недобудка is a static model with the pose baked in and no rig.
+ * Unlike `build-assets.ts`, nothing is skinned here: the mesh arrives ready, so the build only cleans the file up
+ * for the game. Players and NPCs go through the same list; an NPC simply keeps the clips it plays (Повитуха stands
+ * and talks, Недобудка keeps none). Output goes to packages/client/src/assets/models/ and is committed.
+ *
+ * `npm run assets:rig -- neodobudka` builds one character; without arguments it builds them all.
  */
 import { existsSync } from 'node:fs';
 import { join as joinPath } from 'node:path';
@@ -124,7 +127,20 @@ const POVITUHA: Character = {
   },
 };
 
-const CHARACTERS = [MALE, FEMALE, POVITUHA];
+/**
+ * Недобудка, the first guard, asleep at her barrow (docs/characters.md). Meshy made her without a rig: the pose is
+ * baked into the mesh, so the build has no clips to rename or cut, only textures to clean and geometry to compress.
+ * She is 2.00 m tall as she sits — about 4 m standing — with her origin at the bottom and her face toward +Z.
+ */
+const NEODOBUDKA: Character = {
+  output: 'neodobudka',
+  title: 'Недобудка',
+  source: 'assets-src/meshy/neodobudka.glb',
+  scale: 1,
+  clips: {},
+};
+
+const CHARACTERS = [MALE, FEMALE, POVITUHA, NEODOBUDKA];
 
 const io = new NodeIO()
   .registerExtensions(ALL_EXTENSIONS)
@@ -320,7 +336,7 @@ async function build(character: Character): Promise<void> {
   );
   await write(doc, `${character.output}.glb`);
 
-  console.log(`${character.title}: ${built.length} clips, height ${(top - bottom).toFixed(2)} m`);
+  console.log(`${character.title}: ${built.length ? `${built.length} clips` : 'static'}, height ${(top - bottom).toFixed(2)} m`);
   for (const anim of built) {
     console.log(`  ${anim.getName().padEnd(10)} ${lastKey(anim).toFixed(2)} s`);
   }

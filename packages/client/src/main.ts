@@ -3,7 +3,7 @@ import { connectLocal, connectServer, type Connection } from './net/connection.t
 import { createView } from './render/renderer.ts';
 import { Environment } from './render/environment.ts';
 import { createNit } from './render/nit.ts';
-import { ChunkManager } from './world/chunks.ts';
+import { ChunkManager, MOUND_RADIUS } from './world/chunks.ts';
 import { GrassField } from './world/grass.ts';
 import { Avatar, RemotePlayers, preloadAvatars } from './world/avatars.ts';
 import { preload } from './assets/models.ts';
@@ -11,6 +11,7 @@ import { Input } from './player/input.ts';
 import { OrbitCamera } from './player/camera.ts';
 import { LocalPlayer } from './player/local.ts';
 import { PovituhaFigure } from './npc/figure.ts';
+import { Neodobudka } from './npc/neodobudka.ts';
 import { TalkPanel } from './npc/panel.ts';
 import { createBench } from './bench/bench.ts';
 import { startTelemetry } from './telemetry/telemetry.ts';
@@ -26,8 +27,8 @@ const status = document.getElementById('status')!;
 const hud = document.getElementById('hud')!;
 
 /** The nearest grave mound to the spawn: the landmark the first frame looks at. */
-function nearestMound(terrain: Terrain): { x: number; y: number; z: number } {
-  let best = { x: 12, y: terrain.heightAt(12, 0), z: 0 };
+function nearestMound(terrain: Terrain): { x: number; y: number; z: number; scale: number } {
+  let best = { x: 12, y: terrain.heightAt(12, 0), z: 0, scale: 1 };
   let bestDistance = Number.POSITIVE_INFINITY;
   for (let cx = -3; cx <= 3; cx++) {
     for (let cz = -3; cz <= 3; cz++) {
@@ -36,12 +37,23 @@ function nearestMound(terrain: Terrain): { x: number; y: number; z: number } {
         const d = prop.x * prop.x + prop.z * prop.z;
         if (d < bestDistance) {
           bestDistance = d;
-          best = { x: prop.x, y: prop.y, z: prop.z };
+          best = { x: prop.x, y: prop.y, z: prop.z, scale: prop.scale };
         }
       }
     }
   }
   return best;
+}
+
+/**
+ * Недобудка sits at the foot of the barrow, on the spawn side and facing the spawn: the thread of the first frame
+ * leads to her, and the grave stays behind her back. The mound instance is much wider than its unit geometry
+ * (`MOUND_RADIUS`), so the raw scale would bury her inside the hill.
+ */
+function guardSpot(mound: { x: number; z: number; scale: number }): { x: number; z: number } {
+  const length = Math.hypot(mound.x, mound.z) || 1;
+  const distance = MOUND_RADIUS * mound.scale + 1.2;
+  return { x: mound.x - (mound.x / length) * distance, z: mound.z - (mound.z / length) * distance };
 }
 
 const NAME_KEY = 'skeleton.name';
@@ -132,6 +144,7 @@ const START_CHUNKS = 2;
 // The characters load while the player types a name, so the game usually starts at once.
 const avatarsLoaded = preloadAvatars();
 const povituhaLoaded = preload('povituha');
+const neodobudkaLoaded = preload('neodobudka');
 
 const input = new Input(canvas);
 let started = false;
@@ -223,7 +236,7 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
   const local = new LocalPlayer(terrain, spawnState(terrain));
   const orbit = new OrbitCamera(camera, terrain);
   chunks.update(local.state.x, local.state.z);
-  await Promise.all([avatarsLoaded, povituhaLoaded, chunks.whenReady(START_CHUNKS)]);
+  await Promise.all([avatarsLoaded, povituhaLoaded, neodobudkaLoaded, chunks.whenReady(START_CHUNKS)]);
   const me = new Avatar(name || 'Я', 0xd9a441, skeleton);
   scene.add(chunks.root, remotes.root, me.root, grass.root);
   // The first frame: a cold thread leading the eye from the spawn toward the landmark.
@@ -234,6 +247,9 @@ async function start(name: string, skeleton: Skeleton, sound: Mixer | null): Pro
   if (bench) bench.attach({ view, chunks, orbit, terrain, seed });
   const telemetry = bench ? null : startTelemetry({ seed, backend: view.backend, pixelRatio: renderer.getPixelRatio() });
   const povituha = new PovituhaFigure(terrain, scene, 3.4, -4.6);
+  // The sleeping guard at the foot of the barrow the first frame looks at: static, the pose is baked into the mesh.
+  const spot = guardSpot(mound);
+  new Neodobudka(terrain, scene, spot.x, spot.z);
   // The single context and the head bus for Повитуха; without sound the panel keeps its own.
   const audioContext = sound?.audioContext ?? null;
   const audioHead = sound?.head ?? null;
