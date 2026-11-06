@@ -61,6 +61,7 @@ function parseOptions(argv: string[]): Options {
     name: 'spawn',
     seed: 42,
     pixels: true,
+    vision: 1,
     build: true,
     keep: false,
     uncapped: true,
@@ -269,7 +270,7 @@ async function main(): Promise<void> {
 
     const url =
       `http://127.0.0.1:${options.httpPort}/?seed=${options.seed}&bench=${options.seconds}` +
-      `&benchName=${encodeURIComponent(options.name)}${options.pixels ? '' : '&pixels=0'}` +
+      `&benchName=${encodeURIComponent(options.name)}${options.pixels ? '&pixels=1' : '&pixels=0'}` +
       `${options.run ? '&benchRun' : ''}` +
       `${options.scene !== 'spawn' ? `&benchScene=${options.scene}` : ''}` +
       `${options.vision !== undefined ? `&vision=${options.vision}` : ''}` +
