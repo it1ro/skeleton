@@ -48,33 +48,41 @@ interface Tile {
 
 const key = (tx: number, tz: number) => `${tx},${tz}`;
 
+/** Deterministic 0..1 from a seed, so each blade in a tuft gets its own size and lean. */
+function hash01(seed: number): number {
+  const v = Math.sin(seed * 12.9898) * 43758.5453;
+  return v - Math.floor(v);
+}
+
 /**
  * A tuft of crossed tapered quads with vertex colors. No texture and no alpha: the blades are solid,
- * so there is no sorting and no alpha-test overdraw. Five blades read as a clump from any direction.
+ * so there is no sorting and no alpha-test overdraw. Each blade gets its own height, width, lean and
+ * spacing, so a tuft reads as a ragged clump instead of a star of identical slivers.
  */
 function tuftGeometry(blades: number, height: number, width: number): BufferGeometry {
   const positions: number[] = [];
   const normals: number[] = [];
   const colors: number[] = [];
   const indices: number[] = [];
-  const base = new Color(0x2d5522);
-  const tip = new Color(0x9ac455);
+  const base = new Color(0x3a4a2a);
+  const tip = new Color(0x9aa86a);
   const topScale = 0.2;
 
   for (let b = 0; b < blades; b++) {
-    const angle = (b / blades) * Math.PI;
+    const angle = (b / blades) * Math.PI + (hash01(b * 7.3) - 0.5) * 0.6;
     const dx = Math.cos(angle);
     const dz = Math.sin(angle);
     const px = -dz;
     const pz = dx;
-    const h = height * (0.8 + 0.35 * (b % 3));
-    const lean = 0.15;
+    const h = height * (0.5 + hash01(b * 3.1 + 1) * 0.8);
+    const w = width * (0.55 + hash01(b * 5.7 + 2) * 0.9);
+    const lean = 0.05 + hash01(b * 11.3 + 3) * 0.3;
     const start = positions.length / 3;
     const points: [number, number, number][] = [
-      [-px * width, 0, -pz * width],
-      [px * width, 0, pz * width],
-      [dx * lean - px * width * topScale, h, dz * lean - pz * width * topScale],
-      [dx * lean + px * width * topScale, h, dz * lean + pz * width * topScale],
+      [-px * w, 0, -pz * w],
+      [px * w, 0, pz * w],
+      [dx * lean - px * w * topScale, h, dz * lean - pz * w * topScale],
+      [dx * lean + px * w * topScale, h, dz * lean + pz * w * topScale],
     ];
     points.forEach(([x, y, z], index) => {
       positions.push(x, y, z);

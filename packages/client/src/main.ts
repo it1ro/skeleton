@@ -1,7 +1,8 @@
-import { DEFAULT_SEED, TICK_DT, TICK_RATE, createTerrain, moveMode, spawnState, type Skeleton } from '@skeleton/shared';
+import { DEFAULT_SEED, TICK_DT, TICK_RATE, createTerrain, moveMode, spawnState, type Skeleton, type Terrain } from '@skeleton/shared';
 import { connectLocal, connectServer, type Connection } from './net/connection.ts';
 import { createView } from './render/renderer.ts';
 import { Environment } from './render/environment.ts';
+import { createNit } from './render/nit.ts';
 import { ChunkManager } from './world/chunks.ts';
 import { GrassField } from './world/grass.ts';
 import { Avatar, RemotePlayers, preloadAvatars } from './world/avatars.ts';
@@ -19,6 +20,25 @@ const form = document.getElementById('join') as HTMLFormElement;
 const nameInput = document.getElementById('name') as HTMLInputElement;
 const status = document.getElementById('status')!;
 const hud = document.getElementById('hud')!;
+
+/** The nearest grave mound to the spawn: the landmark the first frame looks at. */
+function nearestMound(terrain: Terrain): { x: number; y: number; z: number } {
+  let best = { x: 12, y: terrain.heightAt(12, 0), z: 0 };
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let cx = -3; cx <= 3; cx++) {
+    for (let cz = -3; cz <= 3; cz++) {
+      for (const prop of terrain.propsInChunk(cx, cz)) {
+        if (prop.kind !== 'mound') continue;
+        const d = prop.x * prop.x + prop.z * prop.z;
+        if (d < bestDistance) {
+          bestDistance = d;
+          best = { x: prop.x, y: prop.y, z: prop.z };
+        }
+      }
+    }
+  }
+  return best;
+}
 
 const NAME_KEY = 'skeleton.name';
 const FIGURE_KEY = 'skeleton.figure';
@@ -138,9 +158,13 @@ async function start(name: string, skeleton: Skeleton): Promise<void> {
   const conn: Connection = online ? await connectServer(name, skeleton) : connectLocal(name, localSeed, skeleton);
   const { id: selfId, seed } = conn.welcome;
   const terrain = createTerrain(seed);
+  const mound = nearestMound(terrain);
   const view = await createView(canvas);
   const { renderer, scene, camera } = view;
-  if (params.get('pixels') === '0') view.togglePixels();
+  // Full resolution is the default; `?pixels=1` forces the half-resolution pixel look, `?pixels=0` the smooth one.
+  const pixelsParam = params.get('pixels');
+  if (pixelsParam === '1') view.setPixels(true);
+  else if (pixelsParam === '0') view.setPixels(false);
 
   const env = new Environment(scene);
   view.setOutputNode(env.outputNode);
@@ -177,6 +201,10 @@ async function start(name: string, skeleton: Skeleton): Promise<void> {
   await Promise.all([avatarsLoaded, chunks.whenReady(START_CHUNKS)]);
   const me = new Avatar(name || 'Я', 0xd9a441, skeleton);
   scene.add(chunks.root, remotes.root, me.root, grass.root);
+  // The first frame: a cold thread leading the eye from the spawn toward the landmark.
+  const nit = createNit(mound.x, mound.z);
+  nit.position.set(0, terrain.heightAt(0, 0), 0);
+  scene.add(nit);
   grass.update(local.state.x, local.state.z, true);
   if (bench) bench.attach({ view, chunks, orbit, terrain, seed });
   const telemetry = bench ? null : startTelemetry({ seed, backend: view.backend, pixelRatio: renderer.getPixelRatio() });
@@ -209,6 +237,9 @@ async function start(name: string, skeleton: Skeleton): Promise<void> {
   let frames = 0;
   let fps = 0;
   let hudTime = 0;
+  // The scripted first frame: the camera lies 30 cm above the ground at the spawn, looking at the landmark.
+  const INTRO_MS = 4000;
+  const introStart = performance.now();
 
   renderer.setAnimationLoop(() => {
     const now = performance.now();
@@ -258,11 +289,18 @@ async function start(name: string, skeleton: Skeleton): Promise<void> {
       talk.open();
     }
 
-    orbit.update(input, pos.x, pos.y, pos.z);
+    if (!bench && now - introStart < INTRO_MS) {
+      // Scripted first frame: camera at 30 cm, looking at the landmark through the low fog.
+      const groundY = terrain.heightAt(0, 0);
+      camera.position.set(0, groundY + 0.3, 0);
+      camera.lookAt(mound.x, mound.y, mound.z);
+    } else {
+      orbit.update(input, pos.x, pos.y, pos.z);
+    }
     bench?.placeCamera(pos);
     chunks.update(pos.x, pos.z);
     grass.update(pos.x, pos.z);
-    env.update(serverTick, pos.x, pos.y, pos.z);
+    env.update(serverTick, pos.x, pos.y, pos.z, terrain.biomeAt(pos.x, pos.z));
     remotes.update(serverTick, dt, camera, window.innerWidth, window.innerHeight);
     me.updateLabel(camera, window.innerWidth, window.innerHeight);
     povituha.updateLabel(camera, window.innerWidth, window.innerHeight);

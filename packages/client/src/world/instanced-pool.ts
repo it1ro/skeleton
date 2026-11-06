@@ -15,7 +15,11 @@ const _scale = new Vector3();
 const _up = new Vector3(0, 1, 0);
 const _white = new Color(1, 1, 1);
 
-/** Composes a world-space instance matrix (translation, Y-rotation, uniform scale) into `out` at instance `at`. */
+/**
+ * Composes a world-space instance matrix (translation, Y-rotation, non-uniform scale) into `out` at
+ * instance `at`. `scaleXZ` sizes the footprint, `scaleY` the height, so a tree can be tall and thin
+ * or short and wide without a second geometry.
+ */
 export function composeInstance(
   out: Float32Array,
   at: number,
@@ -23,11 +27,12 @@ export function composeInstance(
   y: number,
   z: number,
   rotation: number,
-  scale: number,
+  scaleXZ: number,
+  scaleY: number = scaleXZ,
 ): void {
   _position.set(x, y, z);
   _quaternion.setFromAxisAngle(_up, rotation);
-  _scale.setScalar(scale);
+  _scale.set(scaleXZ, scaleY, scaleXZ);
   _matrix.compose(_position, _quaternion, _scale);
   out.set(_matrix.elements, at * 16);
 }

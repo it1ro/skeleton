@@ -1,6 +1,7 @@
 export * from './constants.ts';
 export * from './rng.ts';
 export * from './terrain.ts';
+export * from './ground-color.ts';
 export * from './scatter.ts';
 export * from './movement.ts';
 export * from './protocol.ts';

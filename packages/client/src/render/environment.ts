@@ -7,6 +7,7 @@ import {
   Fog,
   HemisphereLight,
   Mesh,
+  MeshBasicMaterial,
   NodeMaterial,
   PlaneGeometry,
   Sprite,
@@ -16,7 +17,7 @@ import {
   type Scene,
 } from 'three/webgpu';
 import type { Node } from 'three/webgpu';
-import { DAY_LENGTH, TICK_DT, WATER_LEVEL } from '@skeleton/shared';
+import { DAY_LENGTH, TICK_DT, WATER_LEVEL, type Biome } from '@skeleton/shared';
 import { applyVision, clampVision } from './vision.ts';
 import { DEFAULT_SHADOW, shadowSettings, type ShadowSettings } from './shadow.ts';
 import {
@@ -48,13 +49,13 @@ import {
   vec4,
 } from 'three/tsl';
 
-const SKY_DAY = new Color(0x9cc4e4);
+const SKY_DAY = new Color(0xa8bcc4);
 const SKY_DUSK = new Color(0xd88a5a);
-const SKY_NIGHT = new Color(0x0c1424);
+const SKY_NIGHT = new Color(0x2a3852);
 /** Richer zenith colors: the top of the sky is more saturated than the foggy horizon. */
-const ZENITH_DAY = new Color(0x3d7eb8);
+const ZENITH_DAY = new Color(0x5c7480);
 const ZENITH_DUSK = new Color(0x8a4a6e);
-const ZENITH_NIGHT = new Color(0x040810);
+const ZENITH_NIGHT = new Color(0x182436);
 const SUN_DAY = new Color(0xfff1d6);
 const SUN_DUSK = new Color(0xffa060);
 const MOON = new Color(0x6f86b8);
@@ -102,8 +103,8 @@ const waveField = Fn(([wxz]: [Node<'vec2'>]) => {
   const sz = cos(pz).mul(WAVE_FREQ_Z).mul(0.6).add(cos(pd).mul(WAVE_FREQ_DIAG).mul(0.4));
   return vec3(h, sx, sz);
 });
-/** Server tick 0 starts at this time of day (0 = midnight, 0.25 = sunrise). */
-const START_TIME = 0.3;
+/** Server tick 0 starts at this time of day (0 = midnight, 0.25 = sunrise): pre-dawn, the sun rises as the player gathers themselves. */
+const START_TIME = 0.21;
 /** Share of the light and sky brightness left at vision 0: the gray start is dim and foggy, not just colorless. */
 const VISION_DIM = 0.75;
 /** The disc sits inside the camera far plane but past the fog far; its material turns fog off. */
@@ -114,6 +115,19 @@ const DISC_SIZE_MOON = 55;
 const CURVE_CONTRAST = 0.2;
 /** How much the night grade darkens the final image (0 = off, 1 = fully dark). */
 const CURVE_NIGHT_GAIN = 0.86;
+
+// --- Fog ---------------------------------------------------------------------
+/** Far fog [near, far] per biome: the Погост hides close, the mountains open up. */
+const FOG_BY_BIOME: Record<Biome, [number, number]> = {
+  meadows: [30, 200], // Погост/Поле
+  forest: [35, 220],
+  mountain: [90, 400],
+  beach: [50, 320],
+  ocean: [60, 380],
+};
+/** Soft blobs hugging the ground (0–2 m): hide the grass ring and LOD seams, not a full-screen effect. */
+const FOG_BLOBS = 5;
+const FOG_BLOB_OPACITY = 0.32;
 
 /** A soft white radial disc: a bright core fading to transparent. Additive blending turns it into a glow. */
 function makeDiscTexture(): CanvasTexture {
@@ -126,6 +140,24 @@ function makeDiscTexture(): CanvasTexture {
   gradient.addColorStop(0, 'rgba(255,255,255,1)');
   gradient.addColorStop(0.4, 'rgba(255,255,255,1)');
   gradient.addColorStop(0.75, 'rgba(255,255,255,0.3)');
+  gradient.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
+  return texture;
+}
+
+/** A soft, wide fog blob: a gentle falloff that reads as haze when tinted by the fog color. */
+function makeFogTexture(): CanvasTexture {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const half = size / 2;
+  const gradient = ctx.createRadialGradient(half, half, 0, half, half, half);
+  gradient.addColorStop(0, 'rgba(255,255,255,0.8)');
+  gradient.addColorStop(0.5, 'rgba(255,255,255,0.35)');
   gradient.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, size, size);
@@ -163,13 +195,16 @@ export class Environment {
   private readonly dayUniform = uniform(1);
   private waterQualityValue = WATER_DEFAULT_QUALITY;
   private readonly disc: Sprite;
+  /** Low ground fog: a few soft planes that hug the terrain and follow the player. */
+  private readonly fogBlobs: Mesh[] = [];
   /** Final color curve, applied inline by the render pipeline. */
   readonly outputNode: Node;
   private readonly curveVision = uniform(1);
   private readonly curveContrast = uniform(CURVE_CONTRAST);
   private readonly curveGain = uniform(1);
   timeOfDay = START_TIME;
-  private vision = 1;
+  /** The world starts gray (before the eyes); `?vision=1` or `__vision(1)` brings the color for now. */
+  private vision = 0;
   private shadowQualityValue = 1;
   /** The shadow level in force. */
   private shadow: ShadowSettings = DEFAULT_SHADOW;
@@ -230,6 +265,24 @@ export class Environment {
       }),
     );
     this.disc.scale.set(DISC_SIZE_SUN, DISC_SIZE_SUN, 1);
+
+    // Low ground fog: a few soft planes that hug the terrain and follow the player, not a full-screen effect.
+    const fogTexture = makeFogTexture();
+    const blobSizes = [48, 64, 80, 56, 72];
+    for (let i = 0; i < FOG_BLOBS; i++) {
+      const material = new MeshBasicMaterial({
+        map: fogTexture,
+        transparent: true,
+        opacity: FOG_BLOB_OPACITY,
+        depthWrite: false,
+        fog: false,
+      });
+      const blob = new Mesh(new PlaneGeometry(1, 1), material);
+      blob.rotateX(-Math.PI / 2);
+      blob.scale.set(blobSizes[i], blobSizes[i], 1);
+      this.fogBlobs.push(blob);
+      scene.add(blob);
+    }
 
     // Color curve: desaturate toward gray as vision falls, then a subtle S-curve and a night gain.
     this.outputNode = Fn(() => {
@@ -309,7 +362,7 @@ export class Environment {
     this.sun.shadow.mapSize.set(settings.mapSize, settings.mapSize);
   }
 
-  update(serverTick: number, focusX: number, focusY: number, focusZ: number): void {
+  update(serverTick: number, focusX: number, focusY: number, focusZ: number, biome: Biome): void {
     this.timeOfDay = (START_TIME + (serverTick * TICK_DT) / DAY_LENGTH) % 1;
     const angle = (this.timeOfDay - 0.25) * Math.PI * 2; // 0 at sunrise
     const height = Math.sin(angle); // -1..1
@@ -325,15 +378,15 @@ export class Environment {
     this.sun.target.position.set(focusX, focusY, focusZ);
     this.sun.color.copy(MOON).lerp(SUN_DUSK, day).lerp(SUN_DAY, day * (1 - dusk));
     applyVision(this.sun.color, vision);
-    this.sun.intensity = (0.35 + day * 2.6) * dim;
+    this.sun.intensity = (0.6 + day * 2.35) * dim;
     this.hemi.color.copy(HEMI_SKY);
     this.hemi.groundColor.copy(HEMI_GROUND);
     applyVision(this.hemi.color, vision);
     applyVision(this.hemi.groundColor, vision);
-    this.hemi.intensity = (0.25 + day * 0.9) * dim;
+    this.hemi.intensity = (1.0 + day * 0.15) * dim;
     this.ambient.color.copy(AMBIENT);
     applyVision(this.ambient.color, vision);
-    this.ambient.intensity = 0.3 * dim;
+    this.ambient.intensity = (0.7 - day * 0.4) * dim;
 
     // Horizon (fog) and zenith colors: the gradient reads these uniforms, so they update in lock-step.
     this.skyBase.copy(SKY_NIGHT).lerp(SKY_DUSK, Math.min(1, day * 2)).lerp(SKY_DAY, day * (1 - dusk * 0.7));
@@ -341,6 +394,11 @@ export class Environment {
     applyVision(this.sky, vision);
     this.sky.multiplyScalar(dim);
     this.fog.color.copy(this.sky);
+    // Far fog follows the biome: dense over the Погост, open in the mountains. Lerped so biome crossings
+    // breathe instead of snapping.
+    const [fogNear, fogFar] = FOG_BY_BIOME[biome];
+    this.fog.near += (fogNear - this.fog.near) * 0.04;
+    this.fog.far += (fogFar - this.fog.far) * 0.04;
 
     this.zenithBase.copy(ZENITH_NIGHT).lerp(ZENITH_DUSK, Math.min(1, day * 2)).lerp(ZENITH_DAY, day * (1 - dusk * 0.7));
     this.zenith.copy(this.zenithBase);
@@ -372,6 +430,21 @@ export class Environment {
     // Snap to a grid so the water plane does not swim with the camera.
     this.water.position.x = Math.round(focusX / 50) * 50;
     this.water.position.z = Math.round(focusZ / 50) * 50;
+
+    // Low fog hugs the ground around the player and drifts slowly.
+    const simT = serverTick * TICK_DT;
+    for (let i = 0; i < this.fogBlobs.length; i++) {
+      const blob = this.fogBlobs[i];
+      const a = (i / this.fogBlobs.length) * Math.PI * 2 + simT * 0.02;
+      const r = 12 + (i % 3) * 16;
+      blob.position.set(
+        focusX + Math.cos(a) * r,
+        focusY + 0.4 + Math.sin(simT * 0.15 + i * 1.9) * 0.3,
+        focusZ + Math.sin(a) * r,
+      );
+      (blob.material as MeshBasicMaterial).color.copy(this.fog.color);
+      (blob.material as MeshBasicMaterial).opacity = FOG_BLOB_OPACITY * dim;
+    }
   }
 
   get clock(): string {
