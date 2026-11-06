@@ -192,7 +192,7 @@ function printHelp(): void {
   --water-debug <1|2>   paint the depth field (1) or the foam (2) instead of the sea
   --vsync               measure with the display cap instead of uncapped
   --run                 run forward instead of standing still (chunk and grass streaming)
-  --scene <name>        camera target: spawn (default), trees, water, shore, surf, sky, sun
+  --scene <name>        camera target: spawn (default), trees, water, shore, surf, edge, sky, sun
   --min-fps <n>         exit with code 1 if the measured fps is lower
   --no-build            reuse packages/client/dist
   --keep                leave the HTTP server and Chrome running

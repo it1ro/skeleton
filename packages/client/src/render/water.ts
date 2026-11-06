@@ -26,6 +26,7 @@ import {
   dot,
   length,
   max,
+  min,
   mix,
   modelWorldMatrix,
   mx_noise_float,
@@ -94,7 +95,7 @@ const WATER_MIN_OPACITY = 0.62;
 /** Depth at which the body reaches its full opacity, meters: the first metres are clear, then water wins. */
 const WATER_CLEAR_DEPTH = 0.35;
 /** Surf: foam colour, the swash period and the band width along the shore, meters. */
-const FOAM_COLOR = new Color(0xd9dbd0);
+const FOAM_COLOR = new Color(0xd3d9d8);
 const SURF_SPEED = 0.9; // rad/s → ~7 s per wave set
 const FOAM_WIDTH_MIN = 1.5;
 const FOAM_WIDTH_MAX = 4.0;
@@ -106,6 +107,42 @@ const FOAM_FADE_NEAR = 60;
 const FOAM_FADE_FAR = 160;
 /** How much of the open-sea wave survives at the waterline: the rest becomes the thin swash sheet. */
 const SHORE_AMPLITUDE = 0.2;
+/** Swash: the horizontal run-up the eye should see on the sand, meters, at any bottom slope. */
+const SWASH_RUNUP_MIN = 1.0;
+const SWASH_RUNUP_MAX = 2.0;
+/** Vertical crest at the waterline, meters: a flat shelf keeps its 1–2 m swash, a bank does not get a bore. */
+const SWASH_AMP_MIN = 0.004;
+const SWASH_AMP_MAX = 0.3;
+/** Shallows: a stylized broken sky on ripple facets — a flat facet keeps the body colour (that was the film). */
+const SHALLOW_SHEEN = 0.18;
+/** The broken-sky patches are ~4 m wide: smaller reads as video noise, larger as a flat tint. */
+const SKY_PATCH_SCALE = 0.25;
+/** Crest light / trough shade: what makes a still frame read as a surface and not a tinted plane. */
+const SURFACE_SHADE = 0.09;
+const SHALLOW_FACET_MIN = 0.02;
+const SHALLOW_FACET_MAX = 0.12;
+/**
+ * Foam lace: a ~2 m tear, a ~6 m hole mask and a ~0.4 m crumb. Isotropic on purpose — a coordinate stretched
+ * along ∇d fans out wherever the shoreline curves (∇d turns with every seabed bump) and reads as combed hair.
+ */
+const FOAM_LACE_SCALE = 1.4;
+const FOAM_HOLE_SCALE = 0.16;
+const FOAM_CRUMB_SCALE = 4.0;
+/**
+ * The foam band is where the water is thinner than a crest or so: on a bumpy 0.2 m flat a width in metres
+ * computed from |∇d| alone swells to 40 m, because |∇d| sees the seabed bumps, not the beach grade.
+ */
+const FOAM_CREST = 1.25;
+/** Far water: a slow tone that survives the fog; 30–60 m folds never shimmer at 720p. */
+const FAR_TONE_NEAR = 140;
+const FAR_TONE_FAR = 380;
+const FAR_TONE_STRENGTH = 0.09;
+/** Stylized sun path: an azimuthal accent, gated by sun height (sine of elevation) so noon has none. */
+const PATH_STRENGTH = 0.32;
+const PATH_LOW = 0.1;
+const PATH_FULL = 0.17;
+const PATH_HIGH = 0.4;
+const PATH_GONE = 0.55;
 /** The plane snaps to this grid so it does not swim with the camera. */
 const WATER_SNAP = 50;
 /** The baked depth field spans [-half, +half] on both axes; UV 0..1 is that square. */
@@ -249,13 +286,34 @@ export class Water {
   }
 
   /**
+   * Swash phase 0..1, led along the shore by low-frequency noise: one slow set every ~7 s, but the line
+   * breathes in sections instead of as one rigid sheet.
+   */
+  private swashPhase(wxz: Node<'vec2'>) {
+    const along = mx_noise_float(wxz.mul(0.035)).mul(0.5).add(0.5);
+    return sin(time.mul(SURF_SPEED).add(along.mul(6.283185))).mul(0.5).add(0.5);
+  }
+
+  /**
    * Displacement amplitude at a depth: open sea offshore, a thin sheet at the waterline so the swell runs up
    * the sand by a metre rather than flooding it, and dead water barely moves.
+   *
+   * The run-up the eye sees is metres of vertical crest over the bottom slope, so the shore crest is picked
+   * *from* the slope: 1–2 m of swash on a 0.02 shelf and on a 0.18 bank alike. A fixed amplitude drowns the
+   * flat shelf by 7 m and deadens the bank. Only past ~1.5 m of depth does the open-sea swell take over.
    */
-  private waveAmp(depth: Node<'float'>, gate: Node<'float'>) {
-    const shore = mix(SHORE_AMPLITUDE, 1.0, smoothstep(0.0, WATER_SHORE_DEPTH, depth));
+  private waveAmp(
+    depth: Node<'float'>,
+    gate: Node<'float'>,
+    slope: Node<'float'>,
+    swash: Node<'float'>,
+  ) {
+    const open = mix(SHORE_AMPLITUDE, 1.0, smoothstep(0.0, WATER_SHORE_DEPTH, depth)).mul(WAVE_AMPLITUDE);
+    const shore = mix(SWASH_RUNUP_MIN, SWASH_RUNUP_MAX, swash)
+      .mul(slope)
+      .clamp(SWASH_AMP_MIN, SWASH_AMP_MAX);
     const live = mix(0.35, 1.0, this.qualityUniform);
-    return shore.mul(gate).mul(live).mul(WAVE_AMPLITUDE);
+    return mix(shore, open, smoothstep(0.15, 1.5, depth)).mul(gate).mul(live);
   }
 
   /**
@@ -278,34 +336,47 @@ export class Water {
     const foamUniform = uniform(new Color(FOAM_COLOR));
     this.material.transparent = true;
 
-    // Shared field samples: rest depth, the displaced surface and the instantaneous thickness over the bed.
+    // Shared field samples: rest depth, the bottom slope under it, the displaced surface and its thickness.
     const worldPos = positionWorld;
     const depth = this.depthNode(worldPos.xz);
     const gate = smoothstep(WATER_FAR, WATER_NEAR, length(cameraPosition.sub(worldPos)));
     const field = waveField(worldPos.xz);
-    const amp = this.waveAmp(depth, gate);
+    const gradient = this.depthGradient(worldPos.xz);
+    // The floor only guards a perfectly flat bed; the width stays in meters even when the slope is tiny.
+    const slopeLen = max(length(gradient), 0.005);
+    const swash = this.swashPhase(worldPos.xz);
+    const amp = this.waveAmp(depth, gate, slopeLen, swash);
     const waterDepth = depth.add(field.x.mul(amp));
     const shadeAmp = this.surfaceAmp();
     const light = this.dayUniform.mul(WATER_DAY_GAIN).add(WATER_AMBIENT);
 
     // Surf: the foam band is a width along the shore (1.5–4 m), not a depth. A depth threshold stretches on a
     // flat shelf into a snow field; the field's gradient converts meters on the shore into meters of depth.
-    const along = mx_noise_float(worldPos.xz.mul(0.035)).mul(0.5).add(0.5);
-    const phase = time.mul(SURF_SPEED).add(along.mul(6.283185));
-    const swash = sin(phase).mul(0.5).add(0.5);
     const width = mix(FOAM_WIDTH_MIN, FOAM_WIDTH_MAX, swash);
-    const gradient = this.depthGradient(worldPos.xz);
-    // The floor only guards a perfectly flat bed; the width stays in meters even when the slope is tiny.
-    const slopeLen = max(length(gradient), 0.005);
-    const threshold = width.mul(slopeLen).clamp(0.01, 0.5);
+    // Meters of band over the shore gradient, but never more than ~a crest: the wave, not the seabed noise,
+    // decides how far the foam reaches.
+    const bandDepth = min(width.mul(slopeLen), amp.mul(FOAM_CREST)).clamp(0.006, 0.5);
     const ragged = mx_noise_float(worldPos.xz.mul(0.9).add(vec2(time.mul(0.04), time.mul(-0.025))));
-    // Breakup: real foam is torn into streaks and patches, not a solid white sheet.
-    const streak = mx_noise_float(worldPos.xz.mul(0.55).add(vec2(time.mul(0.03), time.mul(-0.02)))).mul(0.5).add(0.5);
+    // Breakup: a ~2 m tear with ~6 m holes and a fine crumb on the edge. Sharp masks keep a boundary; the holes
+    // are what stop the band from turning back into a sheet.
+    const lace = mx_noise_float(worldPos.xz.mul(FOAM_LACE_SCALE).add(vec2(time.mul(0.03), time.mul(-0.02))))
+      .mul(0.5)
+      .add(0.5);
+    const holes = mx_noise_float(worldPos.xz.mul(FOAM_HOLE_SCALE).add(vec2(time.mul(0.015), time.mul(0.01))))
+      .mul(0.5)
+      .add(0.5);
+    const crumb = mx_noise_float(worldPos.xz.mul(FOAM_CRUMB_SCALE).add(vec2(time.mul(0.12), time.mul(-0.08))))
+      .mul(0.5)
+      .add(0.5);
     const foamFade = oneMinus(smoothstep(FOAM_FADE_NEAR, FOAM_FADE_FAR, length(cameraPosition.sub(worldPos))));
     // Edge foam at the waterline; the ragged edge moves along the shore in meters, so it tears the same on a
     // gentle shelf. Breakers sit a fixed distance off the waterline instead of at a fixed depth.
-    const raggedDepth = ragged.mul(width).mul(slopeLen).mul(0.6);
-    const surf = oneMinus(smoothstep(threshold.mul(0.35), threshold, waterDepth.add(raggedDepth)));
+    const raggedDepth = ragged.mul(bandDepth).mul(0.55);
+    const torn = waterDepth.add(raggedDepth);
+    // The leading edge is nearly solid — the eye needs a boundary, and it is what hides the 2 m terrain
+    // polygon — while the body behind it is lace with holes.
+    const edgeFoam = oneMinus(smoothstep(0.0, bandDepth.mul(0.55), torn));
+    const bodyFoam = oneMinus(smoothstep(bandDepth.mul(0.55), bandDepth, torn));
     const crest = smoothstep(0.55, 0.9, field.x.mul(0.5).add(0.5));
     const breakNear = slopeLen.mul(BREAK_NEAR);
     const breakFar = slopeLen.mul(BREAK_FAR);
@@ -317,19 +388,25 @@ export class Water {
     // Whitecaps: a steep crest in open water tears white. Sparse by design — a sea of foam reads fake.
     const steep = smoothstep(0.14, 0.24, length(vec2(field.y, field.z)).mul(shadeAmp));
     const whitecap = steep.mul(crest).mul(smoothstep(2.0, 4.0, depth)).mul(0.3);
-    // Fine speckle: the leading edge is droplets, not a clean line.
-    const speckle = mx_noise_float(worldPos.xz.mul(2.4).add(vec2(time.mul(0.12), time.mul(-0.08)))).mul(0.5).add(0.5);
-    const foam = max(max(surf, breaking), whitecap)
-      .mul(smoothstep(0.25, 0.7, streak))
-      .mul(smoothstep(0.3, 0.55, speckle).mul(0.6).add(0.4))
+    // The lace cuts the body, the holes open it, the crumb frays the edge: a band, not a sheet.
+    const laceMask = smoothstep(0.42, 0.56, lace)
+      .mul(mix(0.35, 1.0, smoothstep(0.2, 0.5, holes)))
+      .mul(smoothstep(0.3, 0.5, crumb).mul(0.5).add(0.5));
+    const foam = max(
+      edgeFoam,
+      max(max(bodyFoam, breaking), whitecap).mul(laceMask),
+    )
       .mul(foamFade)
       .mul(smoothstep(0.2, 0.55, this.qualityUniform));
 
-    // Vertex waves: displace the plane by the same field the fragment shades, damped at the waterline.
+    // Vertex waves: displace the plane by the same field the fragment shades, damped at the waterline. The
+    // slope comes from the same four field taps, so the silhouette breathes by 1–2 m on a flat shelf as well.
     this.material.positionNode = Fn(() => {
       const vertexWorld = modelWorldMatrix.mul(positionGeometry).xyz;
       const vertexGate = smoothstep(WATER_FAR, WATER_NEAR, length(vertexWorld.xz.sub(cameraPosition.xz)));
-      const vertexAmp = this.waveAmp(this.depthNode(vertexWorld.xz), vertexGate);
+      const vertexSlope = length(this.depthGradient(vertexWorld.xz));
+      const vertexSwash = this.swashPhase(vertexWorld.xz);
+      const vertexAmp = this.waveAmp(this.depthNode(vertexWorld.xz), vertexGate, vertexSlope, vertexSwash);
       const h = waveField(vertexWorld.xz).x.mul(vertexAmp);
       return positionGeometry.add(vec3(0.0, h, 0.0));
     })();
@@ -357,9 +434,12 @@ export class Water {
       const ripple = mx_noise_float(worldPos.xz.mul(RIPPLE_SCALE).add(vec2(scroll, scroll.mul(0.6))));
 
       const ndv = max(dot(normal, eyeDir), 0.0);
-      // Shallows keep their colour: a full sky reflection at a grazing angle turns the first metres of water
-      // into a grey film over the sand.
-      const reflectivity = mix(0.2, 1.0, smoothstep(0.0, 4.0, depth));
+      // Shallows: the physical fresnel at a 20° view is ~2 %, so a flat facet is body colour only — that is the
+      // turquoise film. The 0.2 clamp stays for flat facets, but a ripple-tilted facet may mirror the sky, so the
+      // reflection breaks into moving patches instead of a grey sheet over the sand.
+      const facet = smoothstep(SHALLOW_FACET_MIN, SHALLOW_FACET_MAX, length(slope));
+      const shallow = oneMinus(smoothstep(0.5, 4.0, depth));
+      const reflectivity = mix(mix(0.2, 1.0, facet), 1.0, smoothstep(0.0, 4.0, depth));
       const fresnel = pow(oneMinus(ndv), FRESNEL_POWER)
         .mul(0.97)
         .add(0.03)
@@ -402,15 +482,62 @@ export class Water {
         .mul(glintFade)
         .mul(oneMinus(foam))
         .mul(vec3(0.55, 0.68, 0.95));
-      const spec = sunSpec.add(moonSpec);
+      // Stylized path (б): a warm band along the sun's bearing, laid over the physical glint. Elevation gates
+      // make it full at 7:00 and gone by noon; the dot gate drops it behind the camera, the noise keeps it from a
+      // ruler. The moon keeps its own cold glint untouched.
+      const toPoint = worldPos.xz.sub(cameraPosition.xz);
+      const toPointDir = toPoint.div(max(length(toPoint), 0.001));
+      const sunAz = normalize(vec2(this.bodyDirectionUniform.x, this.bodyDirectionUniform.z));
+      const azCross = toPointDir.x.mul(sunAz.y).sub(toPointDir.y.mul(sunAz.x));
+      const pathBand = oneMinus(smoothstep(0.0, 0.012, azCross.mul(azCross))).mul(
+        smoothstep(0.2, 0.5, dot(toPointDir, sunAz)),
+      );
+      const pathHeight = smoothstep(PATH_LOW, PATH_FULL, this.bodyElevationUniform).mul(
+        oneMinus(smoothstep(PATH_HIGH, PATH_GONE, this.bodyElevationUniform)),
+      );
+      const pathBreak = mx_noise_float(
+        worldPos.xz.mul(0.18).add(vec2(time.mul(0.05), time.mul(0.03))),
+      )
+        .mul(0.5)
+        .add(0.5);
+      const pathAccent = pathBand
+        .mul(pathHeight)
+        .mul(pathBreak)
+        .mul(this.dayUniform)
+        .mul(glintFade)
+        .mul(oneMinus(foam))
+        .mul(PATH_STRENGTH);
+      const spec = sunSpec.add(moonSpec).add(pathAccent.mul(vec3(1.0, 0.93, 0.8)));
 
-      const waterColor = body
-        .mul(light)
+      // Wet sheen: at a 1.8 m eye the first metres sit at 20–40° where physics mirrors almost nothing. So the
+      // sky is laid on in ripple-sized patches — a broken mirror, not a uniform film — and gated by day so the
+      // shallows do not glow at night.
+      const sheenPatch = smoothstep(
+        0.3,
+        0.75,
+        mx_noise_float(
+          worldPos.xz.mul(SKY_PATCH_SCALE).add(vec2(time.mul(0.04), time.mul(0.02))),
+        )
+          .mul(0.5)
+          .add(0.5),
+      );
+      const sheen = skyColor
+        .mul(shallow.mul(sheenPatch))
+        .mul(SHALLOW_SHEEN)
+        .mul(mix(0.35, 1.0, this.dayUniform));
+
+      // A wave is not flat: crests catch light, troughs sink. Without this the body is one tint and the first
+      // metres read as a coloured film at a high sun.
+      const bodyLight = body.mul(light).mul(field.x.mul(SURFACE_SHADE).add(1.0));
+      const waterColor = bodyLight
         .add(skyColor.mul(fresnel))
+        .add(sheen)
         .add(spec);
-      // A darker line right at the waterline: the eye needs a hard boundary between water and wet sand.
-      const edgeLine = oneMinus(smoothstep(0.0, 0.07, waterDepth)).mul(0.5);
-      const shaded = mix(waterColor, waterColor.mul(0.55), edgeLine);
+      // A dark wet line right at the waterline: the eye needs a boundary, foam alone reads as milk, and this is
+      // what hides the 2 m terrain polygon. Ten centimetres of depth is ~1.5 m on a beach; the lace only varies
+      // its strength, never breaks it — a broken line would expose the polygon it is hiding.
+      const edgeBand = oneMinus(smoothstep(0.0, 0.1, waterDepth)).mul(lace.mul(0.3).add(0.7));
+      const shaded = mix(waterColor, waterColor.mul(0.45), edgeBand.mul(0.7));
       const color = mix(shaded, foamUniform.mul(light), foam);
 
       // Own fog: the same smoothstep as the scene (near/far follow the biome), then a 12 % darker rim at the
@@ -419,6 +546,16 @@ export class Water {
       const fog = smoothstep(this.fogNearUniform, this.fogFarUniform, viewDepth);
       const horizon = smoothstep(HORIZON_START, 1.0, fog).mul(HORIZON_DARK);
       const fogged = mix(color, this.fogColorUniform, fog).mul(oneMinus(horizon));
+
+      // Far water: 100–400 m under the fog is a flat band. A slow tone (30–60 m folds) multiplies the fogged
+      // colour, so it survives the fog instead of fighting it; the folds are far larger than a pixel at 720p.
+      const farGate = smoothstep(FAR_TONE_NEAR, FAR_TONE_FAR, cameraDistance);
+      const farTone = sin(dot(worldPos.xz, vec2(0.021, 0.013)).add(time.mul(0.05)))
+        .add(sin(dot(worldPos.xz, vec2(-0.011, 0.026)).sub(time.mul(0.037))))
+        .mul(0.5)
+        .mul(FAR_TONE_STRENGTH)
+        .mul(farGate);
+      const farFogged = fogged.mul(farTone.add(1.0));
 
       // Depth debug: red is land, white shallow, dark blue deep, with a contour line every 2 m of depth.
       // Off (0) in normal play.
@@ -429,7 +566,7 @@ export class Water {
       const debugColor = mix(vec3(0.8, 0.15, 0.1), ramp, step(0.0, depth));
       const depthMode = step(0.5, this.debugUniform).mul(step(this.debugUniform, 1.5));
       const foamMode = step(1.5, this.debugUniform);
-      const depthView = mix(fogged, debugColor, depthMode);
+      const depthView = mix(farFogged, debugColor, depthMode);
       return mix(depthView, vec3(foam, foam.mul(0.15), foam.mul(0.1)), foamMode);
     })();
 
